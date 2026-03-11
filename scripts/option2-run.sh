@@ -16,6 +16,7 @@ fi
 
 cd "$ELIXIR_DIR"
 mise trust
+mise exec -- mix build
 mise exec -- ./bin/symphony \
   --i-understand-that-this-will-be-running-without-the-usual-guardrails \
   "$WORKFLOW_PATH"

@@ -60,6 +60,7 @@ defmodule SymphonyElixir.Orchestrator do
     }
 
     run_terminal_workspace_cleanup()
+    log_routing_config()
     :ok = schedule_tick(0)
 
     {:ok, state}
@@ -438,6 +439,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp choose_issues(issues, state) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
+    log_non_routable_issues(issues)
 
     issues
     |> sort_issues_for_dispatch()
@@ -529,6 +531,33 @@ defmodule SymphonyElixir.Orchestrator do
        do: assigned_to_worker
 
   defp issue_routable_to_worker?(_issue), do: true
+
+  defp log_routing_config do
+    Logger.info(
+      "Routing config loaded: project_slug=#{inspect(Config.linear_project_slug())} " <>
+        "assignee=#{inspect(Config.linear_assignee())}"
+    )
+  end
+
+  defp log_non_routable_issues(issues) when is_list(issues) do
+    skipped_identifiers =
+      issues
+      |> Enum.filter(fn
+        %Issue{} = issue -> not issue_routable_to_worker?(issue)
+        _ -> false
+      end)
+      |> Enum.map(&(&1.identifier || &1.id))
+      |> Enum.reject(&is_nil/1)
+
+    if skipped_identifiers != [] do
+      Logger.info(
+        "Skipping non-routable issues for this worker count=#{length(skipped_identifiers)} " <>
+          "sample=#{inspect(Enum.take(skipped_identifiers, 5))}"
+      )
+    end
+  end
+
+  defp log_non_routable_issues(_issues), do: :ok
 
   defp todo_issue_blocked_by_non_terminal?(
          %Issue{state: issue_state, blocked_by: blockers},

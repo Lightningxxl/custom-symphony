@@ -84,6 +84,8 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
+- Repository-specific hard gate: for `Lightningxxl/persona-backend`, run `npm test` and record pass/fail evidence in the workpad before any push and before moving to `Human Review`.
+- PR creation/update hard gate: use GitHub CLI (`gh pr create` / `gh pr edit`) only; if `gh auth status` fails, treat as blocker.
 - Keep ticket metadata current (state, checklist, acceptance criteria, links).
 - Treat a single persistent Linear comment as the source of truth for progress.
 - Use that single workpad comment for all progress and handoff notes; do not post separate "done"/summary comments.
@@ -213,6 +215,7 @@ Use this only when completion is blocked by missing required tools or missing au
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
 5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
+    - For `Lightningxxl/persona-backend`, `npm test` is mandatory even when the ticket does not explicitly request it.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
@@ -220,7 +223,8 @@ Use this only when completion is blocked by missing required tools or missing au
     - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
 6.  Re-check all acceptance criteria and close any gaps.
 7.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green, then commit and push changes.
-8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
+    - For `Lightningxxl/persona-backend`, this includes a full `npm test` run on the latest code and capturing a concise result summary in the workpad `Validation` section.
+8.  Create or update the PR using GitHub CLI (`gh pr create` / `gh pr edit`), then attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
     - Ensure the GitHub PR has label `symphony` (add it if missing).
 9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
 10. Update the workpad comment with final checklist status and validation notes.

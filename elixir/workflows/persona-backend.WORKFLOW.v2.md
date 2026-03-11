@@ -84,6 +84,9 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
+- Repository-specific hard gate: for `Lightningxxl/persona-backend`, run `npm test` and record pass/fail evidence in the workpad before any push and before moving to `Human Review`.
+- Cross-agent continuity hard gate: maintain a durable in-repo handoff file at `handoff/{{ issue.identifier }}.md` with implemented feature details, changed files, validation evidence, blockers, and next actions.
+- Publish auth hard gate: for `Lightningxxl/persona-backend`, publish only through `origin` over SSH using the repo-configured deploy key (`core.sshCommand`). Do not switch to unauthenticated HTTPS push.
 - Keep ticket metadata current (state, checklist, acceptance criteria, links).
 - Treat a single persistent Linear comment as the source of truth for progress.
 - Use that single workpad comment for all progress and handoff notes; do not post separate "done"/summary comments.
@@ -98,6 +101,34 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 - Use the blocked-access escape hatch only for true external blockers (missing required tools/auth) after exhausting documented fallbacks.
 
+## Persona Backend Context Pack (required)
+
+- Repository: `Lightningxxl/persona-backend` (`agent-relay-mvp`) and not `openai/symphony`.
+- Primary goal: reliable agent-to-agent relay backend MVP (`request -> accept/reject -> session -> turn relay`).
+- Storage boundary: persist metadata; do not introduce transcript/payload persistence unless explicitly required by the ticket.
+- Protocol boundary: if API or WS events change, update protocol docs (`PROTOCOL.md`) and matching tests in the same change.
+- Runtime boundary: session state invariants (`currentTurnIndex`, `currentSpeakerAgentId`, `maxTurns`, termination semantics) must remain coherent.
+
+## Cross-Agent Persistence Contract (required)
+
+For every issue, create/update `handoff/{{ issue.identifier }}.md` in the target repo and commit it with code changes.
+
+The handoff file must include:
+
+- `Context`: ticket goal and scope assumptions.
+- `Implemented Features`: concrete behavior delivered (not generic summary).
+- `Changed Files`: list with one-line purpose per file.
+- `Validation Evidence`: commands run and concise outcomes (including mandatory `npm test` result).
+- `Blockers`: remaining blockers and exact unblock requirement.
+- `Next Actions`: concrete next steps for the next agent/human.
+
+## GitHub Publish Policy (required)
+
+- Primary publish path: `git push` to `origin` using configured SSH deploy key.
+- Do not use unauthenticated GitHub REST/GraphQL calls as publish fallback for private repos.
+- PR creation/update must use GitHub CLI (`gh pr create` / `gh pr edit`).
+- PR creation requires authenticated GitHub access (`gh auth status` must succeed). If auth is missing, treat as blocker and do not mark completion.
+
 ## Related skills
 
 - `linear`: interact with Linear.
@@ -108,11 +139,12 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 
 ## Status map
 
+- Status alias: `In Review` is equivalent to `Human Review` for this team/workflow.
 - `Backlog` -> out of scope for this workflow; do not modify.
 - `Todo` -> queued; immediately transition to `In Progress` before active work.
   - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `Human Review`).
 - `In Progress` -> implementation actively underway.
-- `Human Review` -> PR is attached and validated; waiting on human approval.
+- `Human Review` / `In Review` -> PR is attached and validated; waiting on human approval.
 - `Merging` -> approved by human; execute the `land` skill flow (do not call `gh pr merge` directly).
 - `Rework` -> reviewer requested changes; planning + implementation required.
 - `Done` -> terminal state; no further action required.
@@ -126,7 +158,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
-   - `Human Review` -> wait and poll for decision/review updates.
+   - `Human Review` / `In Review` -> wait and poll for decision/review updates.
    - `Merging` -> on entry, open and follow `.codex/skills/land/SKILL.md`; do not call `gh pr merge` directly.
    - `Rework` -> run rework flow.
    - `Done` -> do nothing and shut down.
@@ -168,7 +200,8 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
       - merge source(s),
       - result (`clean` or `conflicts resolved`),
       - resulting `HEAD` short SHA.
-10. Compact context and proceed to execution.
+10. Create or refresh `handoff/{{ issue.identifier }}.md` with initial `Context`, `Plan Snapshot`, and kickoff environment details.
+11. Compact context and proceed to execution.
 
 ## PR feedback sweep protocol (required)
 
@@ -209,10 +242,12 @@ Use this only when completion is blocked by missing required tools or missing au
     - Add newly discovered items in the appropriate section.
     - Keep parent/child structure intact as scope evolves.
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
+    - Update `handoff/{{ issue.identifier }}.md` at each meaningful milestone so a new agent can resume without re-discovery.
     - Never leave completed work unchecked in the plan.
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
 5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
+    - For `Lightningxxl/persona-backend`, `npm test` is mandatory even when the ticket does not explicitly request it.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
@@ -220,32 +255,38 @@ Use this only when completion is blocked by missing required tools or missing au
     - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
 6.  Re-check all acceptance criteria and close any gaps.
 7.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green, then commit and push changes.
-8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
+    - For `Lightningxxl/persona-backend`, this includes a full `npm test` run on the latest code and capturing a concise result summary in the workpad `Validation` section.
+8.  Publish branch updates through `origin` using SSH deploy-key auth; do not switch to unauthenticated HTTPS push.
+9.  Create or update the PR using GitHub CLI (`gh pr create` / `gh pr edit`), then attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
     - Ensure the GitHub PR has label `symphony` (add it if missing).
-9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
-10. Update the workpad comment with final checklist status and validation notes.
+10.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
+11. Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
-11. Before moving to `Human Review`, poll PR feedback and checks:
+12. Finalize `handoff/{{ issue.identifier }}.md` before `Human Review`:
+    - Ensure `Implemented Features`, `Changed Files`, and `Validation Evidence` reflect the latest commit.
+    - Include PR URL and current branch/commit pointer for fast continuation.
+    - Ensure the file is committed and pushed with related implementation changes.
+13. Before moving to `Human Review`, poll PR feedback and checks:
     - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
     - Run the full PR feedback sweep protocol.
     - Confirm PR checks are passing (green) after the latest changes.
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
     - Repeat this check-address-verify loop until no outstanding comments remain and checks are fully passing.
     - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
-12. Only then move issue to `Human Review`.
+14. Only then move issue to `Human Review` (or `In Review` when that is the team's configured review state name).
     - Exception: if blocked by missing required non-GitHub tools/auth per the blocked-access escape hatch, move to `Human Review` with the blocker brief and explicit unblock actions.
-13. For `Todo` tickets that already had a PR attached at kickoff:
+15. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Ensure branch was pushed with any required updates.
     - Then move to `Human Review`.
 
 ## Step 3: Human Review and merge handling
 
-1. When the issue is in `Human Review`, do not code or change ticket content.
+1. When the issue is in `Human Review` (or `In Review`), do not code or change ticket content.
 2. Poll for updates as needed, including GitHub PR review comments from humans and bots.
 3. If review feedback requires changes, move the issue to `Rework` and follow the rework flow.
 4. If approved, human moves the issue to `Merging`.
@@ -267,6 +308,7 @@ Use this only when completion is blocked by missing required tools or missing au
 ## Completion bar before Human Review
 
 - Step 1/2 checklist is fully complete and accurately reflected in the single workpad comment.
+- `handoff/{{ issue.identifier }}.md` is updated, committed, and aligned with final implementation/test state.
 - Acceptance criteria and required ticket-provided validation items are complete.
 - Validation/tests are green for the latest commit.
 - PR feedback sweep is complete and no actionable comments remain.
@@ -281,6 +323,7 @@ Use this only when completion is blocked by missing required tools or missing au
 - If issue state is `Backlog`, do not modify it; wait for human to move to `Todo`.
 - Do not edit the issue body/description for planning or progress tracking.
 - Use exactly one persistent workpad comment (`## Codex Workpad`) per issue.
+- Use exactly one persistent handoff file per issue at `handoff/{{ issue.identifier }}.md`.
 - If comment editing is unavailable in-session, use the update script. Only report blocked if both MCP editing and script-based editing are unavailable.
 - Temporary proof edits are allowed only for local verification and must be reverted before commit.
 - If out-of-scope improvements are found, create a separate Backlog issue rather
@@ -289,7 +332,7 @@ Use this only when completion is blocked by missing required tools or missing au
   link to the current issue, and `blockedBy` when the follow-up depends on the
   current issue.
 - Do not move to `Human Review` unless the `Completion bar before Human Review` is satisfied.
-- In `Human Review`, do not make changes; wait and poll.
+- In `Human Review` / `In Review`, do not make changes; wait and poll.
 - If state is terminal (`Done`), do nothing and shut down.
 - Keep issue text concise, specific, and reviewer-oriented.
 - If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action.
