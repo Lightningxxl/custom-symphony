@@ -1,8 +1,8 @@
 ---
 tracker:
   kind: linear
-  api_key: "SET_LOCAL_LINEAR_API_KEY"
-  project_slug: "570afa0abdf6"
+  api_key: "$LINEAR_API_KEY"
+  project_slug: "clawworld"
   assignee: "me"
   active_states:
     - Todo
@@ -22,7 +22,7 @@ workspace:
 hooks:
   after_create: |
     GIT_SSH_COMMAND="ssh -i /Users/lightningmb/Projects/symphony/.keys/persona_backend_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o HostName=ssh.github.com -p 443" \
-      git clone --depth 1 git@github.com:Lightningxxl/persona-backend.git .
+      git clone --depth 1 git@github.com:Lightningxxl/claworld.git .
     test -d .git
     # Persist SSH auth settings in repo so later pull/push by agents do not depend on env vars.
     git config core.sshCommand "ssh -i /Users/lightningmb/Projects/symphony/.keys/persona_backend_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o HostName=ssh.github.com -p 443"

@@ -33,19 +33,61 @@ cd /Users/lightningmb/Projects/symphony
 
 If everything is healthy, you will see a `SYMPHONY STATUS` dashboard in terminal.
 
+## Recommended Project-Owned Workflow Mode
+
+For real project work, prefer running Symphony against the target repo's own
+`WORKFLOW.md` instead of editing `symphony/elixir/WORKFLOW.md`.
+
+For Claworld, use:
+
+```bash
+export LINEAR_API_KEY='your-linear-token'
+cd /Users/lightningmb/Projects/symphony
+./scripts/run-claworld.sh
+```
+
+Default assumptions in `scripts/run-claworld.sh`:
+
+- Claworld repo: `~/Projects/claworld`
+- Symphony workspaces: `~/Projects/claworld-workspaces`
+- OpenClaw reference repo: `~/Projects/openclaw`
+- Feishu reference repo: `~/Projects/clawdbot-feishu` or `~/Projects/clawbot-feishu`
+
+Override them with env vars when needed:
+
+```bash
+CLAWORLD_ROOT=/abs/path/to/claworld \
+SYMPHONY_WORKSPACE_ROOT=/abs/path/to/workspaces \
+OPENCLAW_REF_ROOT=/abs/path/to/openclaw \
+CLAWDBOT_FEISHU_REF_ROOT=/abs/path/to/clawdbot-feishu \
+./scripts/run-claworld.sh
+```
+
+This is the preferred harness-engineering setup because:
+
+- the target repo owns its own repo map, workflow, and validation rules
+- Symphony stays focused on orchestration, workspace lifecycle, and Linear polling
+- project-specific context and acceptance harnesses evolve with the project instead
+  of drifting inside the Symphony repo
+
 ## Current Local State (Important)
 
-Your current `elixir/WORKFLOW.md` is configured to use Linear and already contains:
+Your current `elixir/WORKFLOW.md` is configured to use Linear and now contains:
 
 - `tracker.kind: linear`
-- `tracker.api_key: <hardcoded token>`
-- `tracker.project_slug: 69e7f649fe21`
+- `tracker.api_key: $LINEAR_API_KEY`
+- `tracker.project_slug: clawworld`
+- workspace bootstrap that clones `Lightningxxl/claworld`
 
-That means `./scripts/option2-run.sh` can directly try connecting to your Linear project.
+That means `./scripts/option2-run.sh` can work against the Claworld Linear project
+once `LINEAR_API_KEY` is set in your shell.
+
+Treat that file as the reference implementation workflow for Symphony itself.
+For Claworld development, prefer `./scripts/run-claworld.sh` so the project-owned
+workflow and harness stay authoritative.
 
 ## Recommended Security Mode
 
-Hardcoding token in `WORKFLOW.md` is convenient for testing but risky.
 Recommended approach:
 
 1. Put token in env var.
