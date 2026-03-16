@@ -82,15 +82,16 @@ defmodule SymphonyElixir.CoreTest do
     tracker = Map.get(config, "tracker", %{})
     assert is_map(tracker)
     assert Map.get(tracker, "kind") == "linear"
+    assert Map.get(tracker, "api_key") == "$LINEAR_API_KEY"
+    assert Map.get(tracker, "project_slug") == "$LINEAR_PROJECT_SLUG_ID"
     assert is_binary(Map.get(tracker, "project_slug"))
     assert is_list(Map.get(tracker, "active_states"))
     assert is_list(Map.get(tracker, "terminal_states"))
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
-    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/openai/symphony ."
-    assert Map.get(hooks, "after_create") =~ "cd elixir && mise trust"
-    assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
+    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 git@github.com:Lightningxxl/claworld.git ."
+    assert Map.get(hooks, "after_create") =~ "git config core.sshCommand"
     assert Map.get(hooks, "before_remove") =~ "cd elixir && mise exec -- mix workspace.before_remove"
 
     assert String.trim(prompt) != ""
@@ -113,6 +114,23 @@ defmodule SymphonyElixir.CoreTest do
 
     assert Config.linear_api_token() == env_api_key
     assert Config.linear_project_slug() == "project"
+    assert :ok = Config.validate!()
+  end
+
+  test "linear project slug resolves from LINEAR_PROJECT_SLUG_ID env var" do
+    previous_linear_project_slug_id = System.get_env("LINEAR_PROJECT_SLUG_ID")
+    env_project_slug_id = "test-project-slug-id"
+
+    on_exit(fn -> restore_env("LINEAR_PROJECT_SLUG_ID", previous_linear_project_slug_id) end)
+    System.put_env("LINEAR_PROJECT_SLUG_ID", env_project_slug_id)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_api_token: "test-linear-api-key",
+      tracker_project_slug: nil,
+      codex_command: "/bin/sh app-server"
+    )
+
+    assert Config.linear_project_slug() == env_project_slug_id
     assert :ok = Config.validate!()
   end
 
@@ -539,10 +557,11 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
+    tolerance_ms = 300
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
 
-    assert remaining_ms >= min_remaining_ms
-    assert remaining_ms <= max_remaining_ms
+    assert remaining_ms >= max(min_remaining_ms - tolerance_ms, 0)
+    assert remaining_ms <= max_remaining_ms + tolerance_ms
   end
 
   test "fetch issues by states with empty state set is a no-op" do

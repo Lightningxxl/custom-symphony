@@ -42,6 +42,7 @@ For Claworld, use:
 
 ```bash
 export LINEAR_API_KEY='your-linear-token'
+export LINEAR_PROJECT_SLUG_ID='b6cad86a7c54'
 cd /Users/lightningmb/Projects/symphony
 ./scripts/run-claworld.sh
 ```
@@ -76,11 +77,11 @@ Your current `elixir/WORKFLOW.md` is configured to use Linear and now contains:
 
 - `tracker.kind: linear`
 - `tracker.api_key: $LINEAR_API_KEY`
-- `tracker.project_slug: b6cad86a7c54`
+- `tracker.project_slug: $LINEAR_PROJECT_SLUG_ID`
 - workspace bootstrap that clones `Lightningxxl/claworld`
 
 That means `./scripts/option2-run.sh` can work against the Claworld Linear project
-once `LINEAR_API_KEY` is set in your shell.
+once `LINEAR_API_KEY` and `LINEAR_PROJECT_SLUG_ID` are set in your shell.
 
 Treat that file as the reference implementation workflow for Symphony itself.
 For Claworld development, prefer `./scripts/run-claworld.sh` so the project-owned
@@ -92,11 +93,13 @@ Recommended approach:
 
 1. Put token in env var.
 2. Keep `WORKFLOW.md` as `api_key: $LINEAR_API_KEY`.
+3. Keep the active Linear project binding as `project_slug: $LINEAR_PROJECT_SLUG_ID`.
 
 Example:
 
 ```bash
 export LINEAR_API_KEY='your_new_token'
+export LINEAR_PROJECT_SLUG_ID='b6cad86a7c54'
 ./scripts/option2-run.sh
 ```
 
@@ -116,7 +119,8 @@ If your token was shared in chat or committed, rotate it in Linear immediately.
 - `tracker.api_key`
   - Linear personal API token (or `$LINEAR_API_KEY`).
 - `tracker.project_slug`
-  - Linear project identifier (slugId used by this implementation).
+  - Linear project identifier (slugId used by this implementation, often
+    referenced as `$LINEAR_PROJECT_SLUG_ID`).
 - `tracker.active_states`
   - Issue states that should keep being processed.
 - `tracker.terminal_states`
@@ -173,6 +177,7 @@ Examples:
 
 ### 2) `missing_linear_project_slug` or no issues picked up
 
+- If project is in env mode: `export LINEAR_PROJECT_SLUG_ID='...'`
 - Verify `tracker.project_slug` is correct.
 - Verify issue states in Linear match `active_states`.
 
