@@ -2,7 +2,7 @@
 tracker:
   kind: linear
   api_key: "$LINEAR_API_KEY"
-  project_slug: "clawworld"
+  project_slug: "b6cad86a7c54"
   assignee: "me"
   active_states:
     - Todo

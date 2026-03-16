@@ -76,7 +76,7 @@ Your current `elixir/WORKFLOW.md` is configured to use Linear and now contains:
 
 - `tracker.kind: linear`
 - `tracker.api_key: $LINEAR_API_KEY`
-- `tracker.project_slug: clawworld`
+- `tracker.project_slug: b6cad86a7c54`
 - workspace bootstrap that clones `Lightningxxl/claworld`
 
 That means `./scripts/option2-run.sh` can work against the Claworld Linear project
