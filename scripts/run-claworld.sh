@@ -61,6 +61,30 @@ resolve_env_or_legacy() {
   printf '%s\n' "$fallback"
 }
 
+normalize_github_push_url() {
+  local url="$1"
+  local path
+
+  case "$url" in
+    https://github.com/*)
+      path="${url#https://github.com/}"
+      ;;
+    ssh://git@github.com/*)
+      path="${url#ssh://git@github.com/}"
+      ;;
+    git@github.com:*)
+      path="${url#git@github.com:}"
+      ;;
+    *)
+      printf '%s\n' "$url"
+      return 0
+      ;;
+  esac
+
+  path="${path%.git}"
+  printf 'git@github.com:%s.git\n' "$path"
+}
+
 if [[ -z "${SYMPHONY_WORKSPACE_ROOT:-}" ]]; then
   export SYMPHONY_WORKSPACE_ROOT="$PROJECTS_ROOT/claworld-workspaces"
 fi
@@ -89,7 +113,9 @@ export CLAWORLD_SOURCE_REF="$CLAWORLD_CANONICAL_SOURCE_REF"
 
 if [[ -z "${CLAWORLD_PUSH_REPO_URL:-}" ]]; then
   if PUSH_REPO_URL="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null)"; then
-    export CLAWORLD_PUSH_REPO_URL="$PUSH_REPO_URL"
+    export CLAWORLD_PUSH_REPO_URL="$(normalize_github_push_url "$PUSH_REPO_URL")"
+  else
+    export CLAWORLD_PUSH_REPO_URL="git@github.com:Lightningxxl/claworld.git"
   fi
 fi
 

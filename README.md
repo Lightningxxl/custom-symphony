@@ -77,7 +77,7 @@ Optional Git bootstrap overrides:
 ```bash
 CLAWORLD_CANONICAL_SOURCE_REPO=/abs/path/to/canonical/claworld \
 CLAWORLD_CANONICAL_SOURCE_REF=origin/main \
-CLAWORLD_PUSH_REPO_URL=https://github.com/Lightningxxl/claworld.git \
+CLAWORLD_PUSH_REPO_URL=git@github.com:Lightningxxl/claworld.git \
 CLAWORLD_REFRESH_CANONICAL_SOURCE_ON_START=1 \
 CLAWORLD_ALLOW_STALE_CANONICAL_SOURCE_ON_START=0 \
 ./scripts/run-claworld.sh
