@@ -47,9 +47,17 @@ cd /Users/lightningmb/Projects/symphony
 ./scripts/run-claworld.sh
 ```
 
+For Claworld, treat `./scripts/run-claworld.sh` as the only supported launcher.
+It resolves a canonical local mirror, optionally refreshes its remote-tracking refs with a
+non-destructive `git fetch`, exports an explicit `CLAWORLD_CANONICAL_SOURCE_REF`, and then hands
+control to Symphony. Do not run
+`./scripts/option2-run.sh /Users/lightningmb/Projects/claworld/WORKFLOW.md` directly unless you are
+also setting the Claworld-specific bootstrap env vars yourself.
+
 Default assumptions in `scripts/run-claworld.sh`:
 
 - Claworld repo: `~/Projects/claworld`
+- Claworld canonical source ref: `origin/HEAD` when available, otherwise `origin/main`, then local `HEAD`
 - Symphony workspaces: `~/Projects/claworld-workspaces`
 - OpenClaw reference repo: `~/Projects/openclaw`
 - Feishu reference repo: `~/Projects/clawdbot-feishu` or `~/Projects/clawbot-feishu`
@@ -64,6 +72,24 @@ CLAWDBOT_FEISHU_REF_ROOT=/abs/path/to/clawdbot-feishu \
 ./scripts/run-claworld.sh
 ```
 
+Optional Git bootstrap overrides:
+
+```bash
+CLAWORLD_CANONICAL_SOURCE_REPO=/abs/path/to/canonical/claworld \
+CLAWORLD_CANONICAL_SOURCE_REF=origin/main \
+CLAWORLD_PUSH_REPO_URL=https://github.com/Lightningxxl/claworld.git \
+CLAWORLD_REFRESH_CANONICAL_SOURCE_ON_START=1 \
+CLAWORLD_ALLOW_STALE_CANONICAL_SOURCE_ON_START=0 \
+./scripts/run-claworld.sh
+```
+
+Legacy aliases still work for compatibility:
+
+- `CLAWORLD_SOURCE_REPO_URL`
+- `CLAWORLD_SOURCE_REF`
+- `CLAWORLD_SYNC_REMOTE_ON_START`
+- `CLAWORLD_ALLOW_STALE_SOURCE_ON_START`
+
 This is the preferred harness-engineering setup because:
 
 - the target repo owns its own repo map, workflow, and validation rules
@@ -73,19 +99,21 @@ This is the preferred harness-engineering setup because:
 
 ## Current Local State (Important)
 
-Your current `elixir/WORKFLOW.md` is configured to use Linear and now contains:
+Treat `elixir/WORKFLOW.md` as a reference workflow for Symphony itself, not as the
+authoritative Claworld runtime contract. For Claworld development, the source of truth is:
 
-- `tracker.kind: linear`
-- `tracker.api_key: $LINEAR_API_KEY`
-- `tracker.project_slug: $LINEAR_PROJECT_SLUG_ID`
-- workspace bootstrap that clones `Lightningxxl/claworld`
+- `scripts/run-claworld.sh` for launcher/bootstrap policy
+- `~/Projects/claworld/WORKFLOW.md` for project-owned workspace/bootstrap rules
+- `~/Projects/claworld/docs/SYMPHONY_HARNESS.md` for harness expectations
 
-That means `./scripts/option2-run.sh` can work against the Claworld Linear project
-once `LINEAR_API_KEY` and `LINEAR_PROJECT_SLUG_ID` are set in your shell.
+The practical consequence is:
 
-Treat that file as the reference implementation workflow for Symphony itself.
-For Claworld development, prefer `./scripts/run-claworld.sh` so the project-owned
-workflow and harness stay authoritative.
+- `~/Projects/claworld` acts as the canonical local mirror
+- launcher startup refreshes that mirror from `origin` once before scheduling begins
+- Claworld workspaces are bootstrapped from an explicit canonical source repo and canonical source ref
+- Claworld retries should reuse the existing workspace instead of auto-pulling remote state
+- any remote sync should happen once at launcher time via `git fetch`, not as an implicit
+  `git pull` before every retry
 
 ## Recommended Security Mode
 
