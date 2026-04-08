@@ -4,13 +4,13 @@ defmodule SymphonyElixir.FeishuTaskStateTest do
   alias SymphonyElixir.Feishu.TaskState
   alias SymphonyElixir.Tracker.Item, as: Issue
 
-  test "planner pending tracks human comment changes during planned stage" do
+  test "planner pending tracks human comment changes during planning stage" do
     issue = %Issue{
       id: "task-1",
       identifier: "t100001",
       title: "Plan a task",
       description: "Initial body",
-      state: "Planned",
+      state: "Planning",
       extra: nil,
       current_plan: nil,
       comments: [
@@ -45,7 +45,7 @@ defmodule SymphonyElixir.FeishuTaskStateTest do
       identifier: "t100002",
       title: "Audit a task",
       description: "Initial body",
-      state: "Audit",
+      state: "Auditing",
       task_kind: "bug",
       current_plan: "Plan",
       builder_workpad: "Workpad v1",
@@ -89,10 +89,10 @@ defmodule SymphonyElixir.FeishuTaskStateTest do
     assert context.task_kind == "improvement"
   end
 
-  test "builder rework pending follows latest reviewer rework signal while in progress" do
+  test "builder rework pending follows latest reviewer rework signal while building" do
     issue = %Issue{
       id: "task-4",
-      state: "In Progress",
+      state: "Building",
       comments: [
         %{id: "c1", content: "Builder: initial implementation ready.", created_at: "1", updated_at: "1"},
         %{id: "c2", content: "Planner: rework required for missing ownership cleanup.", created_at: "2", updated_at: "2"}
@@ -109,5 +109,22 @@ defmodule SymphonyElixir.FeishuTaskStateTest do
     }
 
     refute TaskState.builder_rework_requested?(non_rework_issue)
+  end
+
+  test "role for building follows internal hook" do
+    builder_issue = %Issue{id: "task-5", state: "Building", extra: nil, builder_workpad: nil}
+    assert TaskState.role_for_issue(builder_issue) == :builder
+    assert TaskState.builder_mode(builder_issue) == "pickup"
+
+    review_issue = %Issue{
+      id: "task-6",
+      state: "Building",
+      extra: TaskState.set_building_hook(nil, "planner_review", "review"),
+      current_plan: "Plan",
+      builder_workpad: "Workpad"
+    }
+
+    assert TaskState.role_for_issue(review_issue) == :planner
+    assert TaskState.planner_mode(review_issue) == "review"
   end
 end

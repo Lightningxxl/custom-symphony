@@ -9,7 +9,7 @@ defmodule SymphonyElixir.PlannerRunner do
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(%{id: issue_id} = issue, codex_update_recipient \\ nil, opts \\ []) when is_binary(issue_id) do
-    mode = planner_mode(issue.state, issue.current_plan)
+    mode = TaskState.planner_mode(issue)
 
     prompt =
       PromptBuilder.build_planner_prompt(
@@ -43,21 +43,8 @@ defmodule SymphonyElixir.PlannerRunner do
     end
   end
 
-  defp planner_mode(state_name, current_plan) when is_binary(state_name) do
-    case String.downcase(String.trim(state_name)) do
-      "in review" -> "review"
-      _ -> if blank?(current_plan), do: "planning", else: "replanning"
-    end
-  end
-
-  defp planner_mode(_state_name, current_plan), do: if(blank?(current_plan), do: "planning", else: "replanning")
-
   defp maybe_put_attempt(ticket, attempt) when is_integer(attempt), do: Map.put(ticket, :attempt, attempt)
   defp maybe_put_attempt(ticket, _attempt), do: ticket
-
-  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
-  defp blank?(nil), do: true
-  defp blank?(_value), do: false
 
   defp codex_message_handler(recipient, %{id: issue_id}) when is_pid(recipient) and is_binary(issue_id) do
     fn message ->

@@ -3,8 +3,11 @@ tracker:
   tasklist_guid: null
   identity: "user"
   lark_cli_command: "lark-cli"
-  default_stage: "Planned"
-  active_states: ["Todo", "In Progress"]
+  default_stage: "Backlog"
+  active_states: ["Building", "Merging"]
+  builder_states: ["Building", "Merging"]
+  planner_states: ["Planning"]
+  auditor_states: ["Auditing"]
   terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 polling:
   interval_ms: 30000

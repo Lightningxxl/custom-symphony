@@ -14,6 +14,17 @@ defmodule SymphonyElixir.Feishu.TaskState do
           optional(String.t()) => term()
         }
 
+  @building_stage "building"
+  @planning_stage "planning"
+  @auditing_stage "auditing"
+  @merging_stage "merging"
+  @builder_role "builder"
+  @planner_review_role "planner_review"
+  @builder_pickup_phase "pickup"
+  @builder_execute_phase "execute"
+  @builder_rework_phase "rework"
+  @planner_review_phase "review"
+
   @spec parse(String.t() | nil) :: state_map()
   def parse(nil), do: default_state()
 
@@ -23,7 +34,8 @@ defmodule SymphonyElixir.Feishu.TaskState do
         payload
         |> Map.put_new("schema_version", @schema_version)
         |> Map.put_new("meta", %{})
-        |> Map.take(["schema_version", "meta"])
+        |> Map.put_new("workflow", %{})
+        |> Map.take(["schema_version", "meta", "workflow"])
 
       _ ->
         default_state()
@@ -35,19 +47,125 @@ defmodule SymphonyElixir.Feishu.TaskState do
     state
     |> Map.put("schema_version", @schema_version)
     |> Map.put_new("meta", %{})
-    |> Map.take(["schema_version", "meta"])
+    |> Map.put_new("workflow", %{})
+    |> Map.take(["schema_version", "meta", "workflow"])
     |> Jason.encode!(pretty: true)
+  end
+
+  @spec role_for_issue(Item.t()) :: :builder | :planner | :auditor | nil
+  def role_for_issue(%Item{state: state_name} = issue) when is_binary(state_name) do
+    case normalize_stage(state_name) do
+      @planning_stage ->
+        :planner
+
+      @building_stage ->
+        if building_active_role(issue) == @planner_review_role, do: :planner, else: :builder
+
+      @auditing_stage ->
+        :auditor
+
+      @merging_stage ->
+        :builder
+
+      _ ->
+        nil
+    end
+  end
+
+  def role_for_issue(_issue), do: nil
+
+  @spec builder_mode(Item.t()) :: String.t()
+  def builder_mode(%Item{state: state_name} = issue) when is_binary(state_name) do
+    case normalize_stage(state_name) do
+      @merging_stage ->
+        "merge"
+
+      @building_stage ->
+        case building_phase(issue) do
+          @builder_pickup_phase -> "pickup"
+          @builder_rework_phase -> "rework"
+          @planner_review_phase -> "execute"
+          _ -> default_builder_mode(issue)
+        end
+
+      _ ->
+        default_builder_mode(issue)
+    end
+  end
+
+  def builder_mode(_issue), do: "execute"
+
+  @spec planner_mode(Item.t()) :: String.t()
+  def planner_mode(%Item{state: state_name} = issue) when is_binary(state_name) do
+    case normalize_stage(state_name) do
+      @building_stage ->
+        "review"
+
+      _ ->
+        if blank?(issue.current_plan), do: "planning", else: "replanning"
+    end
+  end
+
+  def planner_mode(%Item{} = issue), do: if(blank?(issue.current_plan), do: "planning", else: "replanning")
+
+  @spec building_active_role(Item.t()) :: String.t()
+  def building_active_role(%Item{} = issue) do
+    case workflow_value(issue, "active_role") do
+      @planner_review_role -> @planner_review_role
+      @builder_role -> @builder_role
+      _ -> @builder_role
+    end
+  end
+
+  @spec building_phase(Item.t()) :: String.t()
+  def building_phase(%Item{} = issue) do
+    case workflow_value(issue, "building_phase") do
+      @builder_pickup_phase ->
+        @builder_pickup_phase
+
+      @builder_rework_phase ->
+        @builder_rework_phase
+
+      @planner_review_phase ->
+        @planner_review_phase
+
+      @builder_execute_phase ->
+        @builder_execute_phase
+
+      _ ->
+        inferred_building_phase(issue)
+    end
+  end
+
+  @spec set_building_hook(Item.t() | String.t() | nil, String.t(), String.t()) :: String.t()
+  def set_building_hook(issue_or_extra, active_role, building_phase)
+      when active_role in [@builder_role, @planner_review_role] and
+             building_phase in [@builder_pickup_phase, @builder_execute_phase, @builder_rework_phase, @planner_review_phase] do
+    issue_or_extra
+    |> state_from_issue_or_extra()
+    |> put_workflow("active_role", active_role)
+    |> put_workflow("building_phase", building_phase)
+    |> serialize()
+  end
+
+  @spec clear_building_hook(Item.t() | String.t() | nil) :: String.t()
+  def clear_building_hook(issue_or_extra) do
+    issue_or_extra
+    |> state_from_issue_or_extra()
+    |> Map.put("workflow", %{})
+    |> serialize()
   end
 
   @spec planner_pending?(Item.t()) :: boolean()
   def planner_pending?(%Item{state: state_name} = issue) when is_binary(state_name) do
     case normalize_stage(state_name) do
-      "planned" ->
+      @planning_stage ->
         blank?(issue.current_plan) or
           meta_value(issue, "planner_planning_fingerprint") != planning_fingerprint(issue)
 
-      "in review" ->
-        meta_value(issue, "planner_review_fingerprint") != review_fingerprint(issue)
+      @building_stage ->
+        building_active_role(issue) == @planner_review_role and
+          meta_value(issue, "planner_review_fingerprint") != review_fingerprint(issue)
 
       _ ->
         false
@@ -57,13 +175,17 @@ defmodule SymphonyElixir.Feishu.TaskState do
   def planner_pending?(_issue), do: false
 
   @spec auditor_pending?(Item.t()) :: boolean()
-  def auditor_pending?(%Item{} = issue) do
-    blank?(issue.auditor_verdict) or meta_value(issue, "auditor_fingerprint") != auditor_fingerprint(issue)
+  def auditor_pending?(%Item{state: state_name} = issue) when is_binary(state_name) do
+    normalize_stage(state_name) == @auditing_stage and
+      (blank?(issue.auditor_verdict) or meta_value(issue, "auditor_fingerprint") != auditor_fingerprint(issue))
   end
+
+  def auditor_pending?(_issue), do: false
 
   @spec builder_rework_requested?(Item.t()) :: boolean()
   def builder_rework_requested?(%Item{state: state_name} = issue) when is_binary(state_name) do
-    normalize_stage(state_name) == "in progress" and latest_reviewer_signal(issue.comments || []) == :rework
+    normalize_stage(state_name) == @building_stage and
+      (building_phase(issue) == @builder_rework_phase or latest_reviewer_signal(issue.comments || []) == :rework)
   end
 
   def builder_rework_requested?(_issue), do: false
@@ -75,6 +197,8 @@ defmodule SymphonyElixir.Feishu.TaskState do
       current_plan: issue.current_plan,
       builder_workpad: issue.builder_workpad,
       auditor_verdict: issue.auditor_verdict,
+      workflow_active_role: building_active_role(issue),
+      workflow_building_phase: building_phase(issue),
       comments: issue.comments || [],
       human_comments: human_comments(issue.comments || []),
       reviewer_comments: reviewer_comments(issue.comments || [])
@@ -125,7 +249,8 @@ defmodule SymphonyElixir.Feishu.TaskState do
   defp default_state do
     %{
       "schema_version" => @schema_version,
-      "meta" => %{}
+      "meta" => %{},
+      "workflow" => %{}
     }
   end
 
@@ -136,6 +261,47 @@ defmodule SymphonyElixir.Feishu.TaskState do
       |> Map.put(key, value)
 
     Map.put(state, "meta", meta)
+  end
+
+  defp put_workflow(%{} = state, key, value) do
+    workflow =
+      state
+      |> Map.get("workflow", %{})
+      |> Map.put(key, value)
+
+    Map.put(state, "workflow", workflow)
+  end
+
+  defp workflow_value(%Item{extra: extra}, key) when is_binary(key) do
+    extra
+    |> parse()
+    |> Map.get("workflow", %{})
+    |> Map.get(key)
+  end
+
+  defp state_from_issue_or_extra(%Item{extra: extra}), do: parse(extra)
+  defp state_from_issue_or_extra(extra) when is_binary(extra), do: parse(extra)
+  defp state_from_issue_or_extra(_value), do: default_state()
+
+  defp inferred_building_phase(%Item{} = issue) do
+    cond do
+      blank?(issue.builder_workpad) ->
+        @builder_pickup_phase
+
+      latest_reviewer_signal(issue.comments || []) == :rework ->
+        @builder_rework_phase
+
+      true ->
+        @builder_execute_phase
+    end
+  end
+
+  defp default_builder_mode(%Item{} = issue) do
+    case inferred_building_phase(issue) do
+      @builder_pickup_phase -> "pickup"
+      @builder_rework_phase -> "rework"
+      _ -> "execute"
+    end
   end
 
   defp meta_value(%Item{extra: extra}, key) when is_binary(key) do

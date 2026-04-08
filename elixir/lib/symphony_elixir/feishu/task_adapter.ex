@@ -4,6 +4,7 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
   """
 
   @behaviour SymphonyElixir.Tracker
+  require Logger
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Feishu.{TaskClient, TaskDescription}
@@ -13,6 +14,7 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
   @builder_workpad_field "Builder Workpad"
   @auditor_verdict_field "Auditor Verdict"
   @task_kind_field "Task Kind"
+  @task_key_field "Task Key"
   @backlog_stage "Backlog"
 
   @spec fetch_candidate_issues() :: {:ok, [Item.t()]} | {:error, term()}
@@ -120,10 +122,13 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
     section_guid = Map.get(selected_tasklist || %{}, "section_guid")
     extra = Map.get(task, "extra")
     custom_fields = Map.get(task, "custom_fields", [])
+    task_key = custom_field_text(custom_fields, @task_key_field)
+    identifier = task_identifier(task, task_key)
 
     %Item{
       id: Map.get(task, "guid"),
-      identifier: Map.get(task, "task_id") || Map.get(task, "guid"),
+      identifier: identifier,
+      task_key: task_key,
       title: Map.get(task, "summary"),
       description: description.raw,
       body: description.body,
@@ -149,6 +154,7 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
 
   defp fetch_and_normalize_task(task_guid, context) do
     with {:ok, task} <- TaskClient.get_task(task_guid),
+         {:ok, task} <- maybe_sync_task_key(task, context),
          {:ok, comments} <- TaskClient.list_comments(task_guid) do
       {:ok, normalize_task_payload(task, comments, context)}
     end
@@ -170,6 +176,40 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
 
   defp tasklist_context(_tasklist_guid), do: {:error, :missing_feishu_tasklist_guid}
 
+  defp maybe_sync_task_key(task, context) when is_map(task) and is_map(context) do
+    custom_fields = Map.get(task, "custom_fields", [])
+    current_task_key = custom_field_text(custom_fields, @task_key_field)
+    desired_task_key = desired_task_key(task)
+    task_guid = Map.get(task, "guid")
+    task_key_field_guid = get_in(context, [:custom_field_guids_by_name, @task_key_field])
+
+    cond do
+      is_nil(desired_task_key) ->
+        {:ok, task}
+
+      current_task_key == desired_task_key ->
+        {:ok, task}
+
+      not is_binary(task_guid) or not is_binary(task_key_field_guid) ->
+        {:ok, task}
+
+      true ->
+        case TaskClient.patch_task(task_guid, ["custom_fields"], %{
+               "custom_fields" => [
+                 %{"guid" => task_key_field_guid, "text_value" => desired_task_key}
+               ]
+             }) do
+          {:ok, patched_task} ->
+            {:ok, patched_task}
+
+          {:error, reason} ->
+            Logger.warning("Failed to sync Task Key for task_guid=#{task_guid} desired_task_key=#{desired_task_key}: #{inspect(reason)}")
+
+            {:ok, task}
+        end
+    end
+  end
+
   defp assignee_id(%{"members" => members}) when is_list(members) do
     members
     |> Enum.find(fn member -> Map.get(member, "role") == "assignee" end)
@@ -180,6 +220,27 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
   end
 
   defp assignee_id(_task), do: nil
+
+  defp task_identifier(task, task_key) when is_map(task) do
+    task_key || Map.get(task, "task_id") || Map.get(task, "guid")
+  end
+
+  defp desired_task_key(task) when is_map(task) do
+    case {Config.feishu_task_key_prefix(), Map.get(task, "task_id")} do
+      {prefix, task_id} when is_binary(prefix) and is_binary(task_id) ->
+        prefix = String.trim(prefix)
+        task_id = String.trim(task_id)
+
+        cond do
+          prefix == "" -> nil
+          task_id == "" -> nil
+          true -> "#{prefix}/#{task_id}"
+        end
+
+      _ ->
+        nil
+    end
+  end
 
   defp selected_tasklist_guid(task) when is_map(task) do
     task

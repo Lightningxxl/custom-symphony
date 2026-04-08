@@ -113,8 +113,11 @@ defmodule SymphonyElixir.TestSupport do
           tracker_tasklist_guid: nil,
           tracker_identity: "user",
           tracker_lark_cli_command: "lark-cli",
-          tracker_default_stage: "Planned",
-          tracker_active_states: ["Todo", "In Progress"],
+          tracker_default_stage: "Backlog",
+          tracker_active_states: ["Building", "Merging"],
+          tracker_builder_states: ["Building", "Merging"],
+          tracker_planner_states: ["Planning"],
+          tracker_auditor_states: ["Auditing"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
@@ -149,6 +152,9 @@ defmodule SymphonyElixir.TestSupport do
     tracker_lark_cli_command = Keyword.get(config, :tracker_lark_cli_command)
     tracker_default_stage = Keyword.get(config, :tracker_default_stage)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
+    tracker_builder_states = Keyword.get(config, :tracker_builder_states)
+    tracker_planner_states = Keyword.get(config, :tracker_planner_states)
+    tracker_auditor_states = Keyword.get(config, :tracker_auditor_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
@@ -182,6 +188,9 @@ defmodule SymphonyElixir.TestSupport do
         "  lark_cli_command: #{yaml_value(tracker_lark_cli_command)}",
         "  default_stage: #{yaml_value(tracker_default_stage)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
+        "  builder_states: #{yaml_value(tracker_builder_states)}",
+        "  planner_states: #{yaml_value(tracker_planner_states)}",
+        "  auditor_states: #{yaml_value(tracker_auditor_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
         "polling:",
         "  interval_ms: #{yaml_value(poll_interval_ms)}",

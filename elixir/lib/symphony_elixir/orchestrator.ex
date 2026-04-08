@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Orchestrator do
     Tracker,
     Workspace
   }
+
   alias SymphonyElixir.Tracker.Item, as: Issue
 
   @continuation_retry_delay_ms 1_000
@@ -42,6 +43,7 @@ defmodule SymphonyElixir.Orchestrator do
       :max_concurrent_agents,
       :next_poll_due_at_ms,
       :poll_check_in_progress,
+      :poll_task_ref,
       running: %{},
       completed: MapSet.new(),
       claimed: MapSet.new(),
@@ -66,6 +68,7 @@ defmodule SymphonyElixir.Orchestrator do
       max_concurrent_agents: Config.max_concurrent_agents(),
       next_poll_due_at_ms: now_ms,
       poll_check_in_progress: false,
+      poll_task_ref: nil,
       codex_totals: @empty_codex_totals,
       codex_rate_limits: nil
     }
@@ -89,12 +92,66 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info(:run_poll_cycle, state) do
     state = refresh_runtime_config(state)
-    state = maybe_dispatch(state)
-    now_ms = System.monotonic_time(:millisecond)
-    next_poll_due_at_ms = now_ms + state.poll_interval_ms
-    :ok = schedule_tick(state.poll_interval_ms)
+    state = start_poll_task(state)
 
-    state = %{state | poll_check_in_progress: false, next_poll_due_at_ms: next_poll_due_at_ms}
+    notify_dashboard()
+    {:noreply, state}
+  end
+
+  def handle_info({poll_task_ref, {:ok, snapshot}}, %{poll_task_ref: poll_task_ref} = state)
+      when is_reference(poll_task_ref) do
+    Process.demonitor(poll_task_ref, [:flush])
+
+    state =
+      state
+      |> refresh_runtime_config()
+      |> finish_poll_cycle(snapshot)
+
+    notify_dashboard()
+    {:noreply, state}
+  end
+
+  def handle_info({poll_task_ref, {:error, reason}}, %{poll_task_ref: poll_task_ref} = state)
+      when is_reference(poll_task_ref) do
+    Process.demonitor(poll_task_ref, [:flush])
+    Logger.error("Poll cycle failed: #{inspect(reason)}")
+
+    state =
+      schedule_next_poll(%{
+        state
+        | poll_task_ref: nil,
+          poll_check_in_progress: false
+      })
+
+    notify_dashboard()
+    {:noreply, state}
+  end
+
+  def handle_info({poll_task_ref, _result}, %{poll_task_ref: poll_task_ref} = state)
+      when is_reference(poll_task_ref) do
+    Process.demonitor(poll_task_ref, [:flush])
+
+    state =
+      schedule_next_poll(%{
+        state
+        | poll_task_ref: nil,
+          poll_check_in_progress: false
+      })
+
+    notify_dashboard()
+    {:noreply, state}
+  end
+
+  def handle_info({:DOWN, poll_task_ref, :process, _pid, reason}, %{poll_task_ref: poll_task_ref} = state)
+      when is_reference(poll_task_ref) do
+    Logger.error("Poll worker exited: #{inspect(reason)}")
+
+    state =
+      schedule_next_poll(%{
+        state
+        | poll_task_ref: nil,
+          poll_check_in_progress: false
+      })
 
     notify_dashboard()
     {:noreply, state}
@@ -175,99 +232,208 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  defp maybe_dispatch(%State{} = state) do
-    state = reconcile_running_issues(state)
+  defp start_poll_task(%State{poll_task_ref: nil} = state) do
+    task =
+      Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+        run_poll_snapshot(state)
+      end)
 
-    with :ok <- Config.validate!(),
-         {:ok, issues} <- Tracker.fetch_candidate_issues(),
-         true <- available_slots(state) > 0 do
+    %{state | poll_task_ref: task.ref}
+  end
+
+  defp start_poll_task(%State{} = state), do: state
+
+  defp run_poll_snapshot(%State{} = state) do
+    running_ids = Map.keys(state.running)
+
+    running_issues_result =
+      if running_ids == [] do
+        {:ok, []}
+      else
+        Tracker.fetch_issue_states_by_ids(running_ids)
+      end
+
+    validation_result = Config.validate!()
+
+    candidate_issues_result =
+      if available_slots(state) > 0 and validation_result == :ok do
+        Tracker.fetch_candidate_issues()
+      else
+        :skipped
+      end
+
+    {:ok,
+     %{
+       running_issues_result: running_issues_result,
+       validation_result: validation_result,
+       candidate_issues_result: candidate_issues_result
+     }}
+  rescue
+    error -> {:error, {:poll_snapshot_failed, error, __STACKTRACE__}}
+  catch
+    kind, reason -> {:error, {:poll_snapshot_threw, kind, reason}}
+  end
+
+  defp finish_poll_cycle(%State{} = state, snapshot) when is_map(snapshot) do
+    state =
+      state
+      |> apply_running_issue_refresh(Map.get(snapshot, :running_issues_result, {:ok, []}))
+      |> apply_candidate_dispatch(
+        Map.get(snapshot, :validation_result, {:error, :unknown_poll_validation}),
+        Map.get(snapshot, :candidate_issues_result, :skipped)
+      )
+
+    schedule_next_poll(%{
+      state
+      | poll_task_ref: nil,
+        poll_check_in_progress: false
+    })
+  end
+
+  defp schedule_next_poll(%State{} = state) do
+    now_ms = System.monotonic_time(:millisecond)
+    next_poll_due_at_ms = now_ms + state.poll_interval_ms
+    :ok = schedule_tick(state.poll_interval_ms)
+    %{state | next_poll_due_at_ms: next_poll_due_at_ms}
+  end
+
+  defp apply_running_issue_refresh(%State{} = state, {:ok, issues}) when is_list(issues) do
+    reconcile_running_issue_states(
+      issues,
+      reconcile_stalled_running_issues(state),
+      automation_state_set(),
+      terminal_state_set()
+    )
+  end
+
+  defp apply_running_issue_refresh(%State{} = state, {:error, reason}) do
+    Logger.debug("Failed to refresh running issue states: #{inspect(reason)}; keeping active workers")
+    reconcile_stalled_running_issues(state)
+  end
+
+  defp apply_running_issue_refresh(%State{} = state, _result) do
+    reconcile_stalled_running_issues(state)
+  end
+
+  defp apply_candidate_dispatch(%State{} = state, :ok, {:ok, issues}) when is_list(issues) do
+    if available_slots(state) > 0 do
       choose_issues(issues, state)
     else
-      {:error, :missing_feishu_tasklist_guid} ->
-        Logger.error("Feishu tasklist guid missing in SYMPHONY.yml")
-        state
-
-      {:error, :missing_tracker_kind} ->
-        Logger.error("Tracker kind missing in SYMPHONY.yml")
-
-        state
-
-      {:error, {:unsupported_tracker_kind, kind}} ->
-        Logger.error("Unsupported tracker kind in SYMPHONY.yml: #{inspect(kind)}")
-
-        state
-
-      {:error, :missing_codex_command} ->
-        Logger.error("Codex command missing in SYMPHONY.yml")
-        state
-
-      {:error, {:invalid_codex_approval_policy, value}} ->
-        Logger.error("Invalid codex.approval_policy in SYMPHONY.yml: #{inspect(value)}")
-        state
-
-      {:error, {:invalid_codex_thread_sandbox, value}} ->
-        Logger.error("Invalid codex.thread_sandbox in SYMPHONY.yml: #{inspect(value)}")
-        state
-
-      {:error, {:invalid_codex_turn_sandbox_policy, reason}} ->
-        Logger.error("Invalid codex.turn_sandbox_policy in SYMPHONY.yml: #{inspect(reason)}")
-        state
-
-      {:error, {:missing_config_file, path, reason}} ->
-        Logger.error("Missing SYMPHONY.yml at #{path}: #{inspect(reason)}")
-        state
-
-      {:error, {:missing_workflow_file, path, reason}} ->
-        Logger.error("Missing BUILDER.md at #{path}: #{inspect(reason)}")
-        state
-
-      {:error, {:missing_planner_file, path, reason}} ->
-        Logger.error("Missing PLANNER.md at #{path}: #{inspect(reason)}")
-        state
-
-      {:error, {:missing_auditor_file, path, reason}} ->
-        Logger.error("Missing AUDITOR.md at #{path}: #{inspect(reason)}")
-        state
-
-      {:error, :workflow_config_not_a_map} ->
-        Logger.error("Failed to parse SYMPHONY.yml: top-level YAML must decode to a map")
-        state
-
-      {:error, {:workflow_config_parse_error, reason}} ->
-        Logger.error("Failed to parse SYMPHONY.yml: #{inspect(reason)}")
-        state
-
-      {:error, reason} ->
-        Logger.error("Failed to fetch from tracker: #{inspect(reason)}")
-        state
-
-      false ->
-        state
+      state
     end
   end
 
-  defp reconcile_running_issues(%State{} = state) do
-    state = reconcile_stalled_running_issues(state)
-    running_ids = Map.keys(state.running)
+  defp apply_candidate_dispatch(%State{} = state, :ok, :skipped), do: state
 
-    if running_ids == [] do
-      state
-    else
-      case Tracker.fetch_issue_states_by_ids(running_ids) do
-        {:ok, issues} ->
-          reconcile_running_issue_states(
-            issues,
-            state,
-            automation_state_set(),
-            terminal_state_set()
-          )
+  defp apply_candidate_dispatch(%State{} = state, {:error, :missing_feishu_tasklist_guid}, _candidate_result) do
+    Logger.error("Feishu tasklist guid missing in SYMPHONY.yml")
+    state
+  end
 
-        {:error, reason} ->
-          Logger.debug("Failed to refresh running issue states: #{inspect(reason)}; keeping active workers")
+  defp apply_candidate_dispatch(%State{} = state, {:error, :missing_tracker_kind}, _candidate_result) do
+    Logger.error("Tracker kind missing in SYMPHONY.yml")
+    state
+  end
 
-          state
-      end
-    end
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:unsupported_tracker_kind, kind}},
+         _candidate_result
+       ) do
+    Logger.error("Unsupported tracker kind in SYMPHONY.yml: #{inspect(kind)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(%State{} = state, {:error, :missing_codex_command}, _candidate_result) do
+    Logger.error("Codex command missing in SYMPHONY.yml")
+    state
+  end
+
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:invalid_codex_approval_policy, value}},
+         _candidate_result
+       ) do
+    Logger.error("Invalid codex.approval_policy in SYMPHONY.yml: #{inspect(value)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:invalid_codex_thread_sandbox, value}},
+         _candidate_result
+       ) do
+    Logger.error("Invalid codex.thread_sandbox in SYMPHONY.yml: #{inspect(value)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:invalid_codex_turn_sandbox_policy, reason}},
+         _candidate_result
+       ) do
+    Logger.error("Invalid codex.turn_sandbox_policy in SYMPHONY.yml: #{inspect(reason)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:missing_config_file, path, reason}},
+         _candidate_result
+       ) do
+    Logger.error("Missing SYMPHONY.yml at #{path}: #{inspect(reason)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:missing_workflow_file, path, reason}},
+         _candidate_result
+       ) do
+    Logger.error("Missing BUILDER.md at #{path}: #{inspect(reason)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:missing_planner_file, path, reason}},
+         _candidate_result
+       ) do
+    Logger.error("Missing PLANNER.md at #{path}: #{inspect(reason)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:missing_auditor_file, path, reason}},
+         _candidate_result
+       ) do
+    Logger.error("Missing AUDITOR.md at #{path}: #{inspect(reason)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(%State{} = state, {:error, :workflow_config_not_a_map}, _candidate_result) do
+    Logger.error("Failed to parse SYMPHONY.yml: top-level YAML must decode to a map")
+    state
+  end
+
+  defp apply_candidate_dispatch(
+         %State{} = state,
+         {:error, {:workflow_config_parse_error, reason}},
+         _candidate_result
+       ) do
+    Logger.error("Failed to parse SYMPHONY.yml: #{inspect(reason)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(%State{} = state, :ok, {:error, reason}) do
+    Logger.error("Failed to fetch from tracker: #{inspect(reason)}")
+    state
+  end
+
+  defp apply_candidate_dispatch(%State{} = state, {:error, reason}, _candidate_result) do
+    Logger.error("Failed to fetch from tracker: #{inspect(reason)}")
+    state
   end
 
   @doc false
@@ -313,7 +479,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp reconcile_issue_state(%Issue{} = issue, state, active_states, terminal_states) do
     running_role = state.running |> Map.get(issue.id, %{}) |> Map.get(:role)
-    desired_role = Config.issue_role(issue.state)
+    desired_role = issue_role(issue)
 
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
@@ -552,7 +718,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp candidate_issue?(_issue, _active_states, _terminal_states), do: false
 
   defp dispatchable_issue?(%Issue{} = issue) do
-    case Config.issue_role(issue.state) do
+    case issue_role(issue) do
       :planner ->
         planner_dispatch_required?(issue)
 
@@ -673,61 +839,129 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp do_dispatch_issue(%State{} = state, issue, attempt) do
     recipient = self()
-    role = Config.issue_role(issue.state) || :builder
+    role = issue_role(issue) || :builder
 
-    runner =
-      case role do
-        :planner -> fn -> PlannerRunner.run(issue, recipient, attempt: attempt) end
-        :auditor -> fn -> AuditorRunner.run(issue, recipient, attempt: attempt) end
-        _ -> fn -> BuilderRunner.run(issue, recipient, attempt: attempt) end
-      end
+    with {:ok, issue, runner_opts} <- prepare_issue_for_dispatch(issue, role, attempt) do
+      runner =
+        case role do
+          :planner -> fn -> PlannerRunner.run(issue, recipient, runner_opts) end
+          :auditor -> fn -> AuditorRunner.run(issue, recipient, runner_opts) end
+          _ -> fn -> BuilderRunner.run(issue, recipient, runner_opts) end
+        end
 
-    case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, runner) do
-      {:ok, pid} ->
-        ref = Process.monitor(pid)
+      case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, runner) do
+        {:ok, pid} ->
+          ref = Process.monitor(pid)
 
-        Logger.info("Dispatching issue to #{role} lane: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)}")
+          Logger.info("Dispatching issue to #{role} lane: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)}")
 
-        running =
-          Map.put(state.running, issue.id, %{
-            pid: pid,
-            ref: ref,
+          running =
+            Map.put(state.running, issue.id, %{
+              pid: pid,
+              ref: ref,
+              identifier: issue.identifier,
+              role: role,
+              issue: issue,
+              session_id: nil,
+              last_codex_message: nil,
+              last_codex_timestamp: nil,
+              last_codex_event: nil,
+              codex_app_server_pid: nil,
+              codex_input_tokens: 0,
+              codex_output_tokens: 0,
+              codex_total_tokens: 0,
+              codex_last_reported_input_tokens: 0,
+              codex_last_reported_output_tokens: 0,
+              codex_last_reported_total_tokens: 0,
+              turn_count: 0,
+              retry_attempt: normalize_retry_attempt(attempt),
+              started_at: DateTime.utc_now()
+            })
+
+          %{
+            state
+            | running: running,
+              claimed: MapSet.put(state.claimed, issue.id),
+              retry_attempts: Map.delete(state.retry_attempts, issue.id)
+          }
+
+        {:error, reason} ->
+          Logger.error("Unable to spawn agent for #{issue_context(issue)}: #{inspect(reason)}")
+          next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
+
+          schedule_issue_retry(state, issue.id, next_attempt, %{
             identifier: issue.identifier,
-            role: role,
-            issue: issue,
-            session_id: nil,
-            last_codex_message: nil,
-            last_codex_timestamp: nil,
-            last_codex_event: nil,
-            codex_app_server_pid: nil,
-            codex_input_tokens: 0,
-            codex_output_tokens: 0,
-            codex_total_tokens: 0,
-            codex_last_reported_input_tokens: 0,
-            codex_last_reported_output_tokens: 0,
-            codex_last_reported_total_tokens: 0,
-            turn_count: 0,
-            retry_attempt: normalize_retry_attempt(attempt),
-            started_at: DateTime.utc_now()
+            error: "failed to spawn agent: #{inspect(reason)}"
           })
-
-        %{
-          state
-          | running: running,
-            claimed: MapSet.put(state.claimed, issue.id),
-            retry_attempts: Map.delete(state.retry_attempts, issue.id)
-        }
-
+      end
+    else
       {:error, reason} ->
-        Logger.error("Unable to spawn agent for #{issue_context(issue)}: #{inspect(reason)}")
+        Logger.warning("Skipping dispatch; issue preparation failed for #{issue_context(issue)}: #{inspect(reason)}")
+
         next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
 
         schedule_issue_retry(state, issue.id, next_attempt, %{
           identifier: issue.identifier,
-          error: "failed to spawn agent: #{inspect(reason)}"
+          error: "failed to prepare issue for dispatch: #{inspect(reason)}"
         })
     end
   end
+
+  defp prepare_issue_for_dispatch(%Issue{} = issue, :builder, attempt) do
+    runner_opts = [attempt: attempt]
+
+    case normalize_issue_state(issue.state) do
+      "building" ->
+        mode = TaskState.builder_mode(issue)
+
+        with {:ok, prepared_issue} <- maybe_sync_building_hook(issue, :builder, builder_phase_for_mode(mode)) do
+          {:ok, prepared_issue, Keyword.put(runner_opts, :mode, mode)}
+        end
+
+      _ ->
+        {:ok, issue, runner_opts}
+    end
+  end
+
+  defp prepare_issue_for_dispatch(%Issue{} = issue, :planner, attempt) do
+    prepared_result =
+      case {normalize_issue_state(issue.state), TaskState.planner_mode(issue)} do
+        {"building", "review"} ->
+          maybe_sync_building_hook(issue, :planner, "review")
+
+        _ ->
+          {:ok, issue}
+      end
+
+    with {:ok, prepared_issue} <- prepared_result do
+      {:ok, prepared_issue, [attempt: attempt, mode: TaskState.planner_mode(prepared_issue)]}
+    end
+  end
+
+  defp prepare_issue_for_dispatch(%Issue{} = issue, _role, attempt) do
+    {:ok, issue, [attempt: attempt]}
+  end
+
+  defp maybe_sync_building_hook(%Issue{} = issue, role, phase) when is_binary(phase) do
+    desired_extra =
+      case role do
+        :planner -> TaskState.set_building_hook(issue, "planner_review", phase)
+        _ -> TaskState.set_building_hook(issue, "builder", phase)
+      end
+
+    if TaskState.parse(issue.extra) == TaskState.parse(desired_extra) do
+      {:ok, issue}
+    else
+      with :ok <- Tracker.update_issue_extra(issue.id, desired_extra) do
+        {:ok, %{issue | extra: desired_extra}}
+      end
+    end
+  end
+
+  defp builder_phase_for_mode("pickup"), do: "pickup"
+  defp builder_phase_for_mode("rework"), do: "rework"
+  defp builder_phase_for_mode("merge"), do: "execute"
+  defp builder_phase_for_mode(_mode), do: "execute"
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) do
@@ -1020,7 +1254,7 @@ defmodule SymphonyElixir.Orchestrator do
         %{
           issue_id: issue_id,
           identifier: metadata.identifier,
-          role: Map.get(metadata, :role, Config.issue_role(metadata.issue.state) || :builder),
+          role: Map.get(metadata, :role, issue_role(metadata.issue) || :builder),
           state: metadata.issue.state,
           session_id: metadata.session_id,
           codex_app_server_pid: metadata.codex_app_server_pid,
@@ -1262,22 +1496,24 @@ defmodule SymphonyElixir.Orchestrator do
       :ok
     else
       {:error, reason} ->
-        Logger.warning(
-          "Failed to record #{role} progress for #{issue_context(Map.get(running_entry, :issue))}: #{inspect(reason)}"
-        )
+        Logger.warning("Failed to record #{role} progress for #{issue_context(Map.get(running_entry, :issue))}: #{inspect(reason)}")
 
         :ok
 
       other ->
-        Logger.warning(
-          "Failed to record #{role} progress for #{issue_context(Map.get(running_entry, :issue))}: #{inspect(other)}"
-        )
+        Logger.warning("Failed to record #{role} progress for #{issue_context(Map.get(running_entry, :issue))}: #{inspect(other)}")
 
         :ok
     end
   end
 
   defp maybe_record_role_progress(_running_entry, _role), do: :ok
+
+  defp issue_role(%Issue{} = issue) do
+    TaskState.role_for_issue(issue) || Config.issue_role(issue.state)
+  end
+
+  defp issue_role(_issue), do: nil
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
     available_slots(state) > 0 and state_slots_available?(issue, state.running)

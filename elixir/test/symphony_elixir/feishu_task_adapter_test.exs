@@ -19,6 +19,7 @@ defmodule SymphonyElixir.FeishuTaskAdapterTest do
         }
       ],
       "custom_fields" => [
+        %{"name" => "Task Key", "type" => "text", "text_value" => "claworld/t100001"},
         %{"name" => "Current Plan", "type" => "text", "text_value" => "### Current Plan\nUse task comments for discussion."},
         %{"name" => "Builder Workpad", "type" => "text", "text_value" => "`host:path@sha`\n\n### Plan\n- [ ] Implement"},
         %{"name" => "Auditor Verdict", "type" => "text", "text_value" => "### Verdict\nPending"},
@@ -35,6 +36,7 @@ defmodule SymphonyElixir.FeishuTaskAdapterTest do
       section_guids_by_name: %{"Backlog" => "default-section"},
       default_section_guids: MapSet.new(["default-section"]),
       custom_field_guids_by_name: %{
+        "Task Key" => "field-task-key",
         "Current Plan" => "field-plan",
         "Builder Workpad" => "field-workpad",
         "Auditor Verdict" => "field-audit",
@@ -46,12 +48,15 @@ defmodule SymphonyElixir.FeishuTaskAdapterTest do
     issue = TaskAdapter.normalize_task_payload(task, comments, context)
 
     assert issue.state == "Backlog"
+    assert issue.identifier == "claworld/t100001"
+    assert issue.task_key == "claworld/t100001"
     assert issue.body == "The task description is the human-authored body."
     assert issue.current_plan =~ "Current Plan"
     assert issue.builder_workpad =~ "### Plan"
     assert issue.auditor_verdict =~ "### Verdict"
     assert issue.task_kind == "improvement"
     assert issue.task_custom_field_guids["Current Plan"] == "field-plan"
+    assert issue.task_custom_field_guids["Task Key"] == "field-task-key"
     assert issue.task_section_guids_by_name["Backlog"] == "default-section"
     assert Enum.map(issue.comments, & &1.id) == ["c1"]
   end
@@ -71,8 +76,8 @@ defmodule SymphonyElixir.FeishuTaskAdapterTest do
     }
 
     context = %{
-      section_names_by_guid: %{"in-review-section" => "In Review"},
-      section_guids_by_name: %{"In Review" => "in-review-section"},
+      section_names_by_guid: %{"in-review-section" => "Building"},
+      section_guids_by_name: %{"Building" => "in-review-section"},
       default_section_guids: MapSet.new(),
       custom_field_guids_by_name: %{},
       task_kind_options_by_guid: %{}
@@ -80,6 +85,7 @@ defmodule SymphonyElixir.FeishuTaskAdapterTest do
 
     issue = TaskAdapter.normalize_task_payload(task, [], context)
 
-    assert issue.state == "In Review"
+    assert issue.state == "Building"
+    assert issue.identifier == "task-2"
   end
 end

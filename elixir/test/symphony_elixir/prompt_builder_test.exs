@@ -56,16 +56,18 @@ defmodule SymphonyElixir.PromptBuilderTest do
         %Issue{
           id: "task-123",
           identifier: "TASK-123",
-          state: "Planned",
+          state: "Planning",
           tasklist_guid: "tasklist-456",
+          extra: nil,
           task_custom_field_guids: %{
             "Current Plan" => "field-plan",
             "Builder Workpad" => "field-workpad",
             "Auditor Verdict" => "field-audit"
           },
           task_section_guids_by_name: %{
-            "Planned" => "section-planned",
-            "In Progress" => "section-progress"
+            "Planning" => "section-planning",
+            "Building" => "section-building",
+            "Auditing" => "section-auditing"
           }
         },
         mode: "planning",
@@ -81,6 +83,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "current_plan_field_guid: field-plan"
     assert prompt =~ "/task/v2/comments"
     assert prompt =~ "/task/v2/tasks/task-123/add_tasklist"
+    assert prompt =~ "Set Internal Hook To Planner Review"
+    assert prompt =~ "\"active_role\\\": \\\"planner_review\\\""
     assert prompt =~ "Do not invent alternate task comment endpoints."
   end
 

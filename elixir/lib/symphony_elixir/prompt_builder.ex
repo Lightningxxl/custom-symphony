@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from tracker item data.
   """
 
-  alias SymphonyElixir.Config
+  alias SymphonyElixir.{Config, Feishu.TaskState}
 
   @render_opts [strict_variables: true, strict_filters: true]
 
@@ -99,6 +99,8 @@ defmodule SymphonyElixir.PromptBuilder do
         render_scalar_line("max_turns", Map.get(ticket, :max_turns) || Map.get(ticket, "max_turns")),
         render_scalar_line("attempt", Map.get(ticket, :attempt) || Map.get(ticket, "attempt")),
         render_scalar_line("task_kind", Map.get(ticket, :task_kind) || Map.get(ticket, "task_kind")),
+        render_scalar_line("workflow_active_role", Map.get(ticket, :workflow_active_role) || Map.get(ticket, "workflow_active_role")),
+        render_scalar_line("workflow_building_phase", Map.get(ticket, :workflow_building_phase) || Map.get(ticket, "workflow_building_phase")),
         render_named_block("Current Implementation Plan", Map.get(ticket, :current_plan) || Map.get(ticket, "current_plan")),
         render_named_block("Current Builder Workpad", Map.get(ticket, :builder_workpad) || Map.get(ticket, "builder_workpad")),
         render_named_block("Current Auditor Verdict", Map.get(ticket, :auditor_verdict) || Map.get(ticket, "auditor_verdict")),
@@ -128,6 +130,7 @@ defmodule SymphonyElixir.PromptBuilder do
     tasklist_guid = Map.get(issue, :tasklist_guid) || Map.get(issue, "tasklist_guid")
     field_guids = Map.get(issue, :task_custom_field_guids) || Map.get(issue, "task_custom_field_guids") || %{}
     section_guids = Map.get(issue, :task_section_guids_by_name) || Map.get(issue, "task_section_guids_by_name") || %{}
+    extra = Map.get(issue, :extra) || Map.get(issue, "extra")
 
     blocks =
       [
@@ -140,6 +143,7 @@ defmodule SymphonyElixir.PromptBuilder do
         render_scalar_line("builder_workpad_field_guid", Map.get(field_guids, "Builder Workpad")),
         render_scalar_line("auditor_verdict_field_guid", Map.get(field_guids, "Auditor Verdict")),
         render_scalar_line("task_kind_field_guid", Map.get(field_guids, "Task Kind")),
+        render_named_block("Current Internal Hook", render_internal_hook_summary(extra)),
         render_named_block(
           "Read Task Comments",
           render_shell_command("""
@@ -163,6 +167,26 @@ defmodule SymphonyElixir.PromptBuilder do
           render_shell_command("""
           lark-cli task +comment --as user --task-id '#{task_guid}' --content 'Planner: ...'
           """)
+        ),
+        render_named_block(
+          "Set Internal Hook To Builder Pickup",
+          render_shell_command(render_extra_patch_command(task_guid, TaskState.set_building_hook(extra, "builder", "pickup")))
+        ),
+        render_named_block(
+          "Set Internal Hook To Builder Execute",
+          render_shell_command(render_extra_patch_command(task_guid, TaskState.set_building_hook(extra, "builder", "execute")))
+        ),
+        render_named_block(
+          "Set Internal Hook To Builder Rework",
+          render_shell_command(render_extra_patch_command(task_guid, TaskState.set_building_hook(extra, "builder", "rework")))
+        ),
+        render_named_block(
+          "Set Internal Hook To Planner Review",
+          render_shell_command(render_extra_patch_command(task_guid, TaskState.set_building_hook(extra, "planner_review", "review")))
+        ),
+        render_named_block(
+          "Clear Internal Hook",
+          render_shell_command(render_extra_patch_command(task_guid, TaskState.clear_building_hook(extra)))
         ),
         render_named_block(
           "Move Task Between Stages",
@@ -260,4 +284,35 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   defp render_stage_routing_examples(_task_guid, _tasklist_guid, _section_guids), do: nil
+
+  defp render_internal_hook_summary(extra) do
+    case TaskState.parse(extra) do
+      %{"workflow" => %{} = workflow} ->
+        workflow
+        |> Enum.sort_by(fn {key, _value} -> key end)
+        |> Enum.map_join("\n", fn {key, value} -> "- #{key}: #{value}" end)
+        |> case do
+          "" -> nil
+          rendered -> rendered
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp render_extra_patch_command(task_guid, extra_json)
+       when is_binary(task_guid) and is_binary(extra_json) do
+    params = Jason.encode!(%{"task_guid" => task_guid, "user_id_type" => "open_id"})
+    data = Jason.encode!(%{"update_fields" => ["extra"], "task" => %{"extra" => extra_json}})
+
+    """
+    lark-cli task tasks patch --as user --params '#{escape_shell_single_quotes(params)}' --data '#{escape_shell_single_quotes(data)}'
+    """
+    |> String.trim()
+  end
+
+  defp escape_shell_single_quotes(value) when is_binary(value) do
+    String.replace(value, "'", ~s('"'"'))
+  end
 end

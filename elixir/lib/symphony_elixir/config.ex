@@ -6,14 +6,15 @@ defmodule SymphonyElixir.Config do
   alias NimbleOptions
   alias SymphonyElixir.Workflow
 
-  @default_active_states ["Todo", "In Progress", "Merging"]
-  @default_builder_states ["Todo", "In Progress", "Merging"]
-  @default_planner_states ["Planned", "In Review"]
-  @default_auditor_states ["Audit"]
+  @default_active_states ["Building", "Merging"]
+  @default_builder_states ["Building", "Merging"]
+  @default_planner_states ["Planning"]
+  @default_auditor_states ["Auditing"]
   @default_terminal_states ["Done", "Cancelled", "Canceled", "Closed", "Duplicate"]
   @default_tracker_kind "feishu_task"
   @default_tracker_identity "user"
-  @default_tracker_stage "Planned"
+  @default_tracker_stage "Backlog"
+  @default_task_key_prefix nil
   @default_lark_cli_command "lark-cli"
   @default_prompt_template """
   You are working on a Feishu task.
@@ -60,6 +61,7 @@ defmodule SymphonyElixir.Config do
                                  kind: [type: {:or, [:string, nil]}, default: nil],
                                  tasklist_guid: [type: {:or, [:string, nil]}, default: nil],
                                  identity: [type: :string, default: @default_tracker_identity],
+                                 task_key_prefix: [type: {:or, [:string, nil]}, default: @default_task_key_prefix],
                                  lark_cli_command: [type: :string, default: @default_lark_cli_command],
                                  default_stage: [type: :string, default: @default_tracker_stage],
                                  active_states: [
@@ -223,6 +225,13 @@ defmodule SymphonyElixir.Config do
     validated_workflow_options()
     |> get_in([:tracker, :lark_cli_command])
     |> scalar_or_default(@default_lark_cli_command)
+  end
+
+  @spec feishu_task_key_prefix() :: String.t() | nil
+  def feishu_task_key_prefix do
+    validated_workflow_options()
+    |> get_in([:tracker, :task_key_prefix])
+    |> normalize_secret_value()
   end
 
   @spec default_tracker_stage() :: String.t()
@@ -538,6 +547,7 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:kind, normalize_tracker_kind(scalar_string_value(Map.get(section, "kind"))) || @default_tracker_kind)
     |> put_if_present(:tasklist_guid, scalar_string_value(Map.get(section, "tasklist_guid")))
     |> put_if_present(:identity, scalar_string_value(Map.get(section, "identity")))
+    |> put_if_present(:task_key_prefix, scalar_string_value(Map.get(section, "task_key_prefix")))
     |> put_if_present(:lark_cli_command, scalar_string_value(Map.get(section, "lark_cli_command")))
     |> put_if_present(:default_stage, scalar_string_value(Map.get(section, "default_stage")))
     |> put_if_present(:active_states, csv_value(Map.get(section, "active_states")))

@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Tracker.Item do
   defstruct [
     :id,
     :identifier,
+    :task_key,
     :title,
     :description,
     :body,
@@ -36,6 +37,7 @@ defmodule SymphonyElixir.Tracker.Item do
   @type t :: %__MODULE__{
           id: String.t() | nil,
           identifier: String.t() | nil,
+          task_key: String.t() | nil,
           title: String.t() | nil,
           description: String.t() | nil,
           body: String.t() | nil,

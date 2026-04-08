@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.{Config, Feishu.TaskState, PromptBuilder, Tracker, Workspace}
   alias SymphonyElixir.Tracker.Item
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
@@ -135,7 +135,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp continue_with_issue?(%Item{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
     case issue_state_fetcher.([issue_id]) do
       {:ok, [%Item{} = refreshed_issue | _]} ->
-        if active_issue_state?(refreshed_issue.state) do
+        if builder_owned_issue?(refreshed_issue) do
           {:continue, refreshed_issue}
         else
           {:done, refreshed_issue}
@@ -151,14 +151,18 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp continue_with_issue?(issue, _issue_state_fetcher), do: {:done, issue}
 
-  defp active_issue_state?(state_name) when is_binary(state_name) do
+  defp builder_owned_issue?(%Item{} = issue) do
+    TaskState.role_for_issue(issue) == :builder and active_builder_state?(issue.state)
+  end
+
+  defp active_builder_state?(state_name) when is_binary(state_name) do
     normalized_state = normalize_issue_state(state_name)
 
     Config.builder_states()
     |> Enum.any?(fn active_state -> normalize_issue_state(active_state) == normalized_state end)
   end
 
-  defp active_issue_state?(_state_name), do: false
+  defp active_builder_state?(_state_name), do: false
 
   defp normalize_issue_state(state_name) when is_binary(state_name) do
     state_name

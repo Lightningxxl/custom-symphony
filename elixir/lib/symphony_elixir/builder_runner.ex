@@ -7,22 +7,14 @@ defmodule SymphonyElixir.BuilderRunner do
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(%{id: issue_id} = issue, codex_update_recipient \\ nil, opts \\ []) when is_binary(issue_id) do
+    mode = Keyword.get(opts, :mode, TaskState.builder_mode(issue))
+
     opts =
       opts
-      |> Keyword.put(:mode, builder_mode(issue))
+      |> Keyword.put(:mode, mode)
       |> Keyword.put(:ticket, TaskState.prompt_context(issue))
 
     AgentRunner.run(issue, codex_update_recipient, opts)
   end
 
-  defp builder_mode(%{state: state_name} = issue) when is_binary(state_name) do
-    case String.downcase(String.trim(state_name)) do
-      "todo" -> "pickup"
-      "merging" -> "merge"
-      "in progress" -> if(TaskState.builder_rework_requested?(issue), do: "rework", else: "execute")
-      _ -> "execute"
-    end
-  end
-
-  defp builder_mode(_issue), do: "execute"
 end
