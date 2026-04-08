@@ -1,23 +1,31 @@
 defmodule SymphonyElixir.Config do
   @moduledoc """
-  Runtime configuration loaded from `WORKFLOW.md`.
+  Runtime configuration loaded from `SYMPHONY.yml`.
   """
 
   alias NimbleOptions
   alias SymphonyElixir.Workflow
 
-  @default_active_states ["Todo", "In Progress"]
-  @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
-  @default_linear_endpoint "https://api.linear.app/graphql"
+  @default_active_states ["Todo", "In Progress", "Merging"]
+  @default_builder_states ["Todo", "In Progress", "Merging"]
+  @default_planner_states ["Planned", "In Review"]
+  @default_auditor_states ["Audit"]
+  @default_terminal_states ["Done", "Cancelled", "Canceled", "Closed", "Duplicate"]
+  @default_tracker_kind "feishu_task"
+  @default_tracker_identity "user"
+  @default_tracker_stage "Planned"
+  @default_lark_cli_command "lark-cli"
   @default_prompt_template """
-  You are working on a Linear issue.
+  You are working on a Feishu task.
 
   Identifier: {{ issue.identifier }}
   Title: {{ issue.title }}
+  Stage: {{ issue.state }}
+  Task Kind: {{ issue.task_kind | default: "unspecified" }}
 
   Body:
-  {% if issue.description %}
-  {{ issue.description }}
+  {% if issue.body %}
+  {{ issue.body }}
   {% else %}
   No description provided.
   {% endif %}
@@ -50,13 +58,25 @@ defmodule SymphonyElixir.Config do
                                default: %{},
                                keys: [
                                  kind: [type: {:or, [:string, nil]}, default: nil],
-                                 endpoint: [type: :string, default: @default_linear_endpoint],
-                                 api_key: [type: {:or, [:string, nil]}, default: nil],
-                                 project_slug: [type: {:or, [:string, nil]}, default: nil],
-                                 assignee: [type: {:or, [:string, nil]}, default: nil],
+                                 tasklist_guid: [type: {:or, [:string, nil]}, default: nil],
+                                 identity: [type: :string, default: @default_tracker_identity],
+                                 lark_cli_command: [type: :string, default: @default_lark_cli_command],
+                                 default_stage: [type: :string, default: @default_tracker_stage],
                                  active_states: [
                                    type: {:list, :string},
                                    default: @default_active_states
+                                 ],
+                                 builder_states: [
+                                   type: {:list, :string},
+                                   default: @default_builder_states
+                                 ],
+                                 planner_states: [
+                                   type: {:list, :string},
+                                   default: @default_planner_states
+                                 ],
+                                 auditor_states: [
+                                   type: {:list, :string},
+                                   default: @default_auditor_states
                                  ],
                                  terminal_states: [
                                    type: {:list, :string},
@@ -183,42 +203,110 @@ defmodule SymphonyElixir.Config do
     get_in(validated_workflow_options(), [:tracker, :kind])
   end
 
-  @spec linear_endpoint() :: String.t()
-  def linear_endpoint do
-    get_in(validated_workflow_options(), [:tracker, :endpoint])
-  end
-
-  @spec linear_api_token() :: String.t() | nil
-  def linear_api_token do
+  @spec feishu_tasklist_guid() :: String.t() | nil
+  def feishu_tasklist_guid do
     validated_workflow_options()
-    |> get_in([:tracker, :api_key])
-    |> resolve_env_value(System.get_env("LINEAR_API_KEY"))
+    |> get_in([:tracker, :tasklist_guid])
+    |> resolve_env_value(System.get_env("FEISHU_TASKLIST_GUID"))
     |> normalize_secret_value()
   end
 
-  @spec linear_project_slug() :: String.t() | nil
-  def linear_project_slug do
+  @spec feishu_identity() :: String.t()
+  def feishu_identity do
     validated_workflow_options()
-    |> get_in([:tracker, :project_slug])
-    |> resolve_env_value(System.get_env("LINEAR_PROJECT_SLUG_ID"))
-    |> normalize_secret_value()
+    |> get_in([:tracker, :identity])
+    |> scalar_or_default(@default_tracker_identity)
   end
 
-  @spec linear_assignee() :: String.t() | nil
-  def linear_assignee do
+  @spec lark_cli_command() :: String.t()
+  def lark_cli_command do
     validated_workflow_options()
-    |> get_in([:tracker, :assignee])
-    |> resolve_env_value(System.get_env("LINEAR_ASSIGNEE"))
-    |> normalize_secret_value()
+    |> get_in([:tracker, :lark_cli_command])
+    |> scalar_or_default(@default_lark_cli_command)
   end
 
-  @spec linear_active_states() :: [String.t()]
-  def linear_active_states do
-    get_in(validated_workflow_options(), [:tracker, :active_states])
+  @spec default_tracker_stage() :: String.t()
+  def default_tracker_stage do
+    validated_workflow_options()
+    |> get_in([:tracker, :default_stage])
+    |> scalar_or_default(@default_tracker_stage)
   end
 
-  @spec linear_terminal_states() :: [String.t()]
-  def linear_terminal_states do
+  @spec active_states() :: [String.t()]
+  def active_states do
+    builder_states()
+  end
+
+  @spec builder_states() :: [String.t()]
+  def builder_states do
+    builder_states = get_in(validated_workflow_options(), [:tracker, :builder_states])
+
+    if builder_states == [] do
+      get_in(validated_workflow_options(), [:tracker, :active_states])
+    else
+      builder_states
+    end
+  end
+
+  @spec planner_states() :: [String.t()]
+  def planner_states do
+    get_in(validated_workflow_options(), [:tracker, :planner_states])
+  end
+
+  @spec auditor_states() :: [String.t()]
+  def auditor_states do
+    get_in(validated_workflow_options(), [:tracker, :auditor_states])
+  end
+
+  @spec automation_states() :: [String.t()]
+  def automation_states do
+    [
+      builder_states(),
+      planner_states(),
+      auditor_states()
+    ]
+    |> List.flatten()
+    |> Enum.map(&normalize_issue_state/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  @spec issue_role(term()) :: :builder | :planner | :auditor | nil
+  def issue_role(state_name) when is_binary(state_name) do
+    normalized_state = normalize_issue_state(state_name)
+
+    cond do
+      normalized_state in Enum.map(builder_states(), &normalize_issue_state/1) -> :builder
+      normalized_state in Enum.map(planner_states(), &normalize_issue_state/1) -> :planner
+      normalized_state in Enum.map(auditor_states(), &normalize_issue_state/1) -> :auditor
+      true -> nil
+    end
+  end
+
+  def issue_role(_state_name), do: nil
+
+  @spec automation_issue_state?(term()) :: boolean()
+  def automation_issue_state?(state_name) when is_binary(state_name) do
+    issue_role(state_name) != nil
+  end
+
+  def automation_issue_state?(_state_name), do: false
+
+  @spec role_workflow(term()) :: {:ok, workflow_payload()} | {:error, term()}
+  def role_workflow(:builder), do: Workflow.current()
+  def role_workflow(:planner), do: Workflow.planner_current()
+  def role_workflow(:auditor), do: Workflow.auditor_current()
+  def role_workflow(_role), do: Workflow.current()
+
+  @spec role_states(:builder | :planner | :auditor) :: [String.t()]
+  def role_states(:builder), do: builder_states()
+  def role_states(:planner), do: planner_states()
+  def role_states(:auditor), do: auditor_states()
+
+  def role_states(_role), do: []
+
+  @spec terminal_states() :: [String.t()]
+  def terminal_states do
     get_in(validated_workflow_options(), [:tracker, :terminal_states])
   end
 
@@ -368,8 +456,7 @@ defmodule SymphonyElixir.Config do
   def validate! do
     with {:ok, _workflow} <- current_workflow(),
          :ok <- require_tracker_kind(),
-         :ok <- require_linear_token(),
-         :ok <- require_linear_project(),
+         :ok <- require_feishu_tasklist(),
          :ok <- require_valid_codex_runtime_settings() do
       require_codex_command()
     end
@@ -391,34 +478,20 @@ defmodule SymphonyElixir.Config do
 
   defp require_tracker_kind do
     case tracker_kind() do
-      "linear" -> :ok
+      "feishu_task" -> :ok
       "memory" -> :ok
       nil -> {:error, :missing_tracker_kind}
       other -> {:error, {:unsupported_tracker_kind, other}}
     end
   end
 
-  defp require_linear_token do
+  defp require_feishu_tasklist do
     case tracker_kind() do
-      "linear" ->
-        if is_binary(linear_api_token()) do
+      "feishu_task" ->
+        if is_binary(feishu_tasklist_guid()) do
           :ok
         else
-          {:error, :missing_linear_api_token}
-        end
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp require_linear_project do
-    case tracker_kind() do
-      "linear" ->
-        if is_binary(linear_project_slug()) do
-          :ok
-        else
-          {:error, :missing_linear_project_slug}
+          {:error, :missing_feishu_tasklist_guid}
         end
 
       _ ->
@@ -462,14 +535,24 @@ defmodule SymphonyElixir.Config do
 
   defp extract_tracker_options(section) do
     %{}
-    |> put_if_present(:kind, normalize_tracker_kind(scalar_string_value(Map.get(section, "kind"))))
-    |> put_if_present(:endpoint, scalar_string_value(Map.get(section, "endpoint")))
-    |> put_if_present(:api_key, binary_value(Map.get(section, "api_key"), allow_empty: true))
-    |> put_if_present(:project_slug, scalar_string_value(Map.get(section, "project_slug")))
-    |> put_if_present(:assignee, scalar_string_value(Map.get(section, "assignee")))
+    |> put_if_present(:kind, normalize_tracker_kind(scalar_string_value(Map.get(section, "kind"))) || @default_tracker_kind)
+    |> put_if_present(:tasklist_guid, scalar_string_value(Map.get(section, "tasklist_guid")))
+    |> put_if_present(:identity, scalar_string_value(Map.get(section, "identity")))
+    |> put_if_present(:lark_cli_command, scalar_string_value(Map.get(section, "lark_cli_command")))
+    |> put_if_present(:default_stage, scalar_string_value(Map.get(section, "default_stage")))
     |> put_if_present(:active_states, csv_value(Map.get(section, "active_states")))
+    |> put_if_present(:builder_states, csv_value(Map.get(section, "builder_states")))
+    |> put_if_present(:planner_states, csv_value(Map.get(section, "planner_states")))
+    |> put_if_present(:auditor_states, csv_value(Map.get(section, "auditor_states")))
     |> put_if_present(:terminal_states, csv_value(Map.get(section, "terminal_states")))
   end
+
+  defp scalar_or_default(value, default) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: default, else: trimmed
+  end
+
+  defp scalar_or_default(_value, default), do: default
 
   defp extract_polling_options(section) do
     %{}

@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.CLI do
   @moduledoc """
-  Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
+  Escript entrypoint for running Symphony against a repository root.
   """
 
   alias SymphonyElixir.LogFile
@@ -10,7 +10,9 @@ defmodule SymphonyElixir.CLI do
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
+          dir?: (String.t() -> boolean()),
           file_regular?: (String.t() -> boolean()),
+          set_repo_root: (String.t() -> :ok | {:error, term()}),
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
@@ -36,14 +38,14 @@ defmodule SymphonyElixir.CLI do
         with :ok <- require_guardrails_acknowledgement(opts),
              :ok <- maybe_set_logs_root(opts, deps),
              :ok <- maybe_set_server_port(opts, deps) do
-          run(Path.expand("WORKFLOW.md"), deps)
+          run(File.cwd!(), deps)
         end
 
-      {opts, [workflow_path], []} ->
+      {opts, [target_path], []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
              :ok <- maybe_set_logs_root(opts, deps),
              :ok <- maybe_set_server_port(opts, deps) do
-          run(workflow_path, deps)
+          run(target_path, deps)
         end
 
       _ ->
@@ -52,38 +54,85 @@ defmodule SymphonyElixir.CLI do
   end
 
   @spec run(String.t(), deps()) :: :ok | {:error, String.t()}
-  def run(workflow_path, deps) do
-    expanded_path = Path.expand(workflow_path)
+  def run(target_path, deps) do
+    expanded_path = Path.expand(target_path)
 
-    if deps.file_regular?.(expanded_path) do
-      :ok = deps.set_workflow_file_path.(expanded_path)
+    cond do
+      deps.dir?.(expanded_path) ->
+        config_path = Path.join(expanded_path, "SYMPHONY.yml")
+        builder_path = Path.join(expanded_path, "BUILDER.md")
+        planner_path = Path.join(expanded_path, "PLANNER.md")
+        auditor_path = Path.join(expanded_path, "AUDITOR.md")
 
-      case deps.ensure_all_started.() do
-        {:ok, _started_apps} ->
-          :ok
+        cond do
+          !deps.file_regular?.(config_path) ->
+            {:error, "Config file not found: #{config_path}"}
 
-        {:error, reason} ->
-          {:error, "Failed to start Symphony with workflow #{expanded_path}: #{inspect(reason)}"}
-      end
-    else
-      {:error, "Workflow file not found: #{expanded_path}"}
+          !deps.file_regular?.(builder_path) ->
+            {:error, "Builder file not found: #{builder_path}"}
+
+          !deps.file_regular?.(planner_path) ->
+            {:error, "Planner file not found: #{planner_path}"}
+
+          !deps.file_regular?.(auditor_path) ->
+            {:error, "Auditor file not found: #{auditor_path}"}
+
+          true ->
+            :ok = deps.set_repo_root.(expanded_path)
+            ensure_started(expanded_path, deps)
+        end
+
+      deps.file_regular?.(expanded_path) ->
+        config_path = Path.join(Path.dirname(expanded_path), "SYMPHONY.yml")
+        planner_path = Path.join(Path.dirname(expanded_path), "PLANNER.md")
+        auditor_path = Path.join(Path.dirname(expanded_path), "AUDITOR.md")
+
+        if deps.file_regular?.(config_path) do
+          if deps.file_regular?.(planner_path) do
+            if deps.file_regular?.(auditor_path) do
+              :ok = deps.set_workflow_file_path.(expanded_path)
+              ensure_started(expanded_path, deps)
+            else
+              {:error, "Auditor file not found: #{auditor_path}"}
+            end
+          else
+            {:error, "Planner file not found: #{planner_path}"}
+          end
+        else
+          {:error, "Config file not found: #{config_path}"}
+        end
+
+      true ->
+        {:error, "Repository or builder file not found: #{expanded_path}"}
     end
   end
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
+    "Usage: symphony [--logs-root <path>] [--port <port>] [repo-dir-or-path-to-BUILDER.md]"
   end
 
   @spec runtime_deps() :: deps()
   defp runtime_deps do
     %{
+      dir?: &File.dir?/1,
       file_regular?: &File.regular?/1,
+      set_repo_root: &SymphonyElixir.Workflow.set_repo_root/1,
       set_workflow_file_path: &SymphonyElixir.Workflow.set_workflow_file_path/1,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end
     }
+  end
+
+  defp ensure_started(target, deps) do
+    case deps.ensure_all_started.() do
+      {:ok, _started_apps} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, "Failed to start Symphony with target #{target}: #{inspect(reason)}"}
+    end
   end
 
   defp maybe_set_logs_root(opts, deps) do

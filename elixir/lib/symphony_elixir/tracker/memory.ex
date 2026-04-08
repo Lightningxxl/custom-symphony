@@ -5,14 +5,14 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @behaviour SymphonyElixir.Tracker
 
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Tracker.Item
 
-  @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
+  @spec fetch_candidate_issues() :: {:ok, [Item.t()]} | {:error, term()}
   def fetch_candidate_issues do
     {:ok, issue_entries()}
   end
 
-  @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  @spec fetch_issues_by_states([String.t()]) :: {:ok, [Item.t()]} | {:error, term()}
   def fetch_issues_by_states(state_names) do
     normalized_states =
       state_names
@@ -20,24 +20,49 @@ defmodule SymphonyElixir.Tracker.Memory do
       |> MapSet.new()
 
     {:ok,
-     Enum.filter(issue_entries(), fn %Issue{state: state} ->
+     Enum.filter(issue_entries(), fn %Item{state: state} ->
        MapSet.member?(normalized_states, normalize_state(state))
      end)}
   end
 
-  @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+  @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [Item.t()]} | {:error, term()}
   def fetch_issue_states_by_ids(issue_ids) do
     wanted_ids = MapSet.new(issue_ids)
 
     {:ok,
-     Enum.filter(issue_entries(), fn %Issue{id: id} ->
+     Enum.filter(issue_entries(), fn %Item{id: id} ->
        MapSet.member?(wanted_ids, id)
      end)}
+  end
+
+  @spec fetch_issue_comments(String.t()) :: {:ok, [map()]} | {:error, term()}
+  def fetch_issue_comments(issue_id) do
+    comments =
+      Application.get_env(:symphony_elixir, :memory_tracker_comments, [])
+      |> Enum.filter(fn
+        %{issue_id: ^issue_id} -> true
+        %{"issue_id" => ^issue_id} -> true
+        _ -> false
+      end)
+
+    {:ok, comments}
   end
 
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) do
     send_event({:memory_tracker_comment, issue_id, body})
+    :ok
+  end
+
+  @spec create_comment(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def create_comment(issue_id, body, opts) do
+    send_event({:memory_tracker_comment, issue_id, body, opts})
+    :ok
+  end
+
+  @spec update_comment(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_comment(comment_id, body) do
+    send_event({:memory_tracker_comment_update, comment_id, body})
     :ok
   end
 
@@ -47,12 +72,18 @@ defmodule SymphonyElixir.Tracker.Memory do
     :ok
   end
 
+  @spec update_issue_extra(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_extra(issue_id, extra) do
+    send_event({:memory_tracker_extra_update, issue_id, extra})
+    :ok
+  end
+
   defp configured_issues do
     Application.get_env(:symphony_elixir, :memory_tracker_issues, [])
   end
 
   defp issue_entries do
-    Enum.filter(configured_issues(), &match?(%Issue{}, &1))
+    Enum.filter(configured_issues(), &match?(%Item{}, &1))
   end
 
   defp send_event(message) do

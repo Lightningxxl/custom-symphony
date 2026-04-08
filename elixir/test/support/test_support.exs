@@ -1,5 +1,7 @@
 defmodule SymphonyElixir.TestSupport do
   @workflow_prompt "You are an agent for this repository."
+  @planner_prompt "You are the planner agent for this repository."
+  @auditor_prompt "You are the auditor agent for this repository."
 
   defmacro __using__(_opts) do
     quote do
@@ -11,12 +13,11 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Codex.AppServer
       alias SymphonyElixir.Config
       alias SymphonyElixir.HttpServer
-      alias SymphonyElixir.Linear.Client
-      alias SymphonyElixir.Linear.Issue
       alias SymphonyElixir.Orchestrator
       alias SymphonyElixir.PromptBuilder
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
+      alias SymphonyElixir.Tracker.Item, as: Issue
       alias SymphonyElixir.Workflow
       alias SymphonyElixir.WorkflowStore
       alias SymphonyElixir.Workspace
@@ -32,14 +33,18 @@ defmodule SymphonyElixir.TestSupport do
           )
 
         File.mkdir_p!(workflow_root)
-        workflow_file = Path.join(workflow_root, "WORKFLOW.md")
+        workflow_file = Path.join(workflow_root, "BUILDER.md")
         write_workflow_file!(workflow_file)
-        Workflow.set_workflow_file_path(workflow_file)
+        Workflow.set_repo_root(workflow_root)
         if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
         stop_default_http_server()
 
         on_exit(fn ->
+          Application.delete_env(:symphony_elixir, :config_file_path)
           Application.delete_env(:symphony_elixir, :workflow_file_path)
+          Application.delete_env(:symphony_elixir, :planner_file_path)
+          Application.delete_env(:symphony_elixir, :auditor_file_path)
+          Application.delete_env(:symphony_elixir, :repo_root)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
@@ -52,8 +57,10 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   def write_workflow_file!(path, overrides \\ []) do
-    workflow = workflow_content(overrides)
-    File.write!(path, workflow)
+    File.write!(Path.join(Path.dirname(path), "SYMPHONY.yml"), workflow_config_content(overrides))
+    File.write!(path, workflow_prompt_content(overrides))
+    write_planner_file!(Path.join(Path.dirname(path), "PLANNER.md"), overrides)
+    write_auditor_file!(Path.join(Path.dirname(path), "AUDITOR.md"), overrides)
 
     if Process.whereis(SymphonyElixir.WorkflowStore) do
       try do
@@ -64,6 +71,16 @@ defmodule SymphonyElixir.TestSupport do
     end
 
     :ok
+  end
+
+  defp write_planner_file!(path, overrides) do
+    planner_prompt = Keyword.get(overrides, :planner_prompt, @planner_prompt)
+    File.write!(path, planner_prompt <> "\n")
+  end
+
+  defp write_auditor_file!(path, overrides) do
+    auditor_prompt = Keyword.get(overrides, :auditor_prompt, @auditor_prompt)
+    File.write!(path, auditor_prompt <> "\n")
   end
 
   def restore_env(key, nil), do: System.delete_env(key)
@@ -88,15 +105,15 @@ defmodule SymphonyElixir.TestSupport do
     end
   end
 
-  defp workflow_content(overrides) do
+  defp workflow_config_content(overrides) do
     config =
       Keyword.merge(
         [
-          tracker_kind: "linear",
-          tracker_endpoint: "https://api.linear.app/graphql",
-          tracker_api_token: "token",
-          tracker_project_slug: "project",
-          tracker_assignee: nil,
+          tracker_kind: "memory",
+          tracker_tasklist_guid: nil,
+          tracker_identity: "user",
+          tracker_lark_cli_command: "lark-cli",
+          tracker_default_stage: "Planned",
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           poll_interval_ms: 30_000,
@@ -122,16 +139,15 @@ defmodule SymphonyElixir.TestSupport do
           observability_render_interval_ms: 16,
           server_port: nil,
           server_host: nil,
-          prompt: @workflow_prompt
         ],
         overrides
       )
 
     tracker_kind = Keyword.get(config, :tracker_kind)
-    tracker_endpoint = Keyword.get(config, :tracker_endpoint)
-    tracker_api_token = Keyword.get(config, :tracker_api_token)
-    tracker_project_slug = Keyword.get(config, :tracker_project_slug)
-    tracker_assignee = Keyword.get(config, :tracker_assignee)
+    tracker_tasklist_guid = Keyword.get(config, :tracker_tasklist_guid)
+    tracker_identity = Keyword.get(config, :tracker_identity)
+    tracker_lark_cli_command = Keyword.get(config, :tracker_lark_cli_command)
+    tracker_default_stage = Keyword.get(config, :tracker_default_stage)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
@@ -157,17 +173,14 @@ defmodule SymphonyElixir.TestSupport do
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
     server_port = Keyword.get(config, :server_port)
     server_host = Keyword.get(config, :server_host)
-    prompt = Keyword.get(config, :prompt)
-
     sections =
       [
-        "---",
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
-        "  endpoint: #{yaml_value(tracker_endpoint)}",
-        "  api_key: #{yaml_value(tracker_api_token)}",
-        "  project_slug: #{yaml_value(tracker_project_slug)}",
-        "  assignee: #{yaml_value(tracker_assignee)}",
+        "  tasklist_guid: #{yaml_value(tracker_tasklist_guid)}",
+        "  identity: #{yaml_value(tracker_identity)}",
+        "  lark_cli_command: #{yaml_value(tracker_lark_cli_command)}",
+        "  default_stage: #{yaml_value(tracker_default_stage)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
         "polling:",
@@ -189,13 +202,15 @@ defmodule SymphonyElixir.TestSupport do
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
-        server_yaml(server_port, server_host),
-        "---",
-        prompt
+        server_yaml(server_port, server_host)
       ]
       |> Enum.reject(&(&1 in [nil, ""]))
 
     Enum.join(sections, "\n") <> "\n"
+  end
+
+  defp workflow_prompt_content(overrides) do
+    Keyword.get(overrides, :prompt, @workflow_prompt) <> "\n"
   end
 
   defp yaml_value(value) when is_binary(value) do

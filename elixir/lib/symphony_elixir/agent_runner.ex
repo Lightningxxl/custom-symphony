@@ -1,11 +1,12 @@
 defmodule SymphonyElixir.AgentRunner do
   @moduledoc """
-  Executes a single Linear issue in an isolated workspace with Codex.
+  Executes a single tracker item in an isolated workspace with Codex.
   """
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.{Config, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.Tracker.Item
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, codex_update_recipient \\ nil, opts \\ []) do
@@ -38,7 +39,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp send_codex_update(recipient, %Issue{id: issue_id}, message)
+  defp send_codex_update(recipient, %Item{id: issue_id}, message)
        when is_binary(issue_id) and is_pid(recipient) do
     send(recipient, {:codex_worker_update, issue_id, message})
     :ok
@@ -100,23 +101,40 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp build_turn_prompt(issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)
+  defp build_turn_prompt(issue, opts, turn_number, max_turns) do
+    prompt_opts =
+      opts
+      |> Keyword.put(:turn_number, turn_number)
+      |> Keyword.put(:max_turns, max_turns)
+      |> Keyword.put(:turn_phase, turn_phase(turn_number))
+      |> put_ticket_run_context(turn_number, max_turns)
 
-  defp build_turn_prompt(_issue, _opts, turn_number, max_turns) do
-    """
-    Continuation guidance:
-
-    - The previous Codex turn completed normally, but the Linear issue is still in an active state.
-    - This is continuation turn ##{turn_number} of #{max_turns} for the current agent run.
-    - Resume from the current workspace and workpad state instead of restarting from scratch.
-    - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
-    - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
-    """
+    PromptBuilder.build_prompt(issue, prompt_opts)
   end
 
-  defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
+  defp turn_phase(1), do: "initial"
+  defp turn_phase(turn_number) when is_integer(turn_number) and turn_number > 1, do: "continuation"
+
+  defp put_ticket_run_context(opts, turn_number, max_turns) do
+    ticket =
+      opts
+      |> Keyword.get(:ticket, %{})
+      |> Map.new()
+      |> Map.put(:mode, Keyword.get(opts, :mode))
+      |> Map.put(:turn_phase, turn_phase(turn_number))
+      |> Map.put(:turn_number, turn_number)
+      |> Map.put(:max_turns, max_turns)
+      |> maybe_put_attempt(Keyword.get(opts, :attempt))
+
+    Keyword.put(opts, :ticket, ticket)
+  end
+
+  defp maybe_put_attempt(ticket, attempt) when is_integer(attempt), do: Map.put(ticket, :attempt, attempt)
+  defp maybe_put_attempt(ticket, _attempt), do: ticket
+
+  defp continue_with_issue?(%Item{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
     case issue_state_fetcher.([issue_id]) do
-      {:ok, [%Issue{} = refreshed_issue | _]} ->
+      {:ok, [%Item{} = refreshed_issue | _]} ->
         if active_issue_state?(refreshed_issue.state) do
           {:continue, refreshed_issue}
         else
@@ -136,7 +154,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp active_issue_state?(state_name) when is_binary(state_name) do
     normalized_state = normalize_issue_state(state_name)
 
-    Config.linear_active_states()
+    Config.builder_states()
     |> Enum.any?(fn active_state -> normalize_issue_state(active_state) == normalized_state end)
   end
 
@@ -148,7 +166,7 @@ defmodule SymphonyElixir.AgentRunner do
     |> String.downcase()
   end
 
-  defp issue_context(%Issue{id: issue_id, identifier: identifier}) do
+  defp issue_context(%Item{id: issue_id, identifier: identifier}) do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
 end

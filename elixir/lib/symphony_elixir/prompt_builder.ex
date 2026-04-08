@@ -1,28 +1,50 @@
 defmodule SymphonyElixir.PromptBuilder do
   @moduledoc """
-  Builds agent prompts from Linear issue data.
+  Builds agent prompts from tracker item data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.Config
 
   @render_opts [strict_variables: true, strict_filters: true]
 
-  @spec build_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
+  @spec build_prompt(map(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
+    build_role_prompt(:builder, issue, opts)
+  end
+
+  @spec build_planner_prompt(map(), keyword()) :: String.t()
+  def build_planner_prompt(issue, opts \\ []) do
+    build_role_prompt(:planner, issue, opts)
+  end
+
+  @spec build_auditor_prompt(map(), keyword()) :: String.t()
+  def build_auditor_prompt(issue, opts \\ []) do
+    build_role_prompt(:auditor, issue, opts)
+  end
+
+  defp build_role_prompt(role, issue, opts) do
     template =
-      Workflow.current()
+      Config.role_workflow(role)
       |> prompt_template!()
       |> parse_template!()
 
-    template
-    |> Solid.render!(
-      %{
-        "attempt" => Keyword.get(opts, :attempt),
-        "issue" => issue |> Map.from_struct() |> to_solid_map()
-      },
-      @render_opts
-    )
-    |> IO.iodata_to_binary()
+    assigns = %{
+      "attempt" => Keyword.get(opts, :attempt),
+      "issue" => issue |> Map.from_struct() |> to_solid_map(),
+      "max_turns" => Keyword.get(opts, :max_turns),
+      "role" => Atom.to_string(role),
+      "mode" => Keyword.get(opts, :mode),
+      "turn_number" => Keyword.get(opts, :turn_number),
+      "turn_phase" => Keyword.get(opts, :turn_phase),
+      "ticket" => opts |> Keyword.get(:ticket, %{}) |> to_solid_value()
+    }
+
+    rendered =
+      template
+      |> Solid.render!(assigns, @render_opts)
+      |> IO.iodata_to_binary()
+
+    rendered <> ticket_snapshot_suffix(issue, Keyword.get(opts, :ticket), role)
   end
 
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
@@ -61,4 +83,181 @@ defmodule SymphonyElixir.PromptBuilder do
       prompt
     end
   end
+
+  defp ticket_snapshot_suffix(issue, nil, role), do: runtime_contract_suffix() <> task_operations_suffix(issue, role)
+
+  defp ticket_snapshot_suffix(issue, ticket, role) when is_map(ticket) do
+    sections =
+      [
+        "",
+        runtime_contract_suffix(),
+        "## Feishu Task Snapshot",
+        "- active_role: #{role}",
+        render_scalar_line("mode", Map.get(ticket, :mode) || Map.get(ticket, "mode")),
+        render_scalar_line("turn_phase", Map.get(ticket, :turn_phase) || Map.get(ticket, "turn_phase")),
+        render_scalar_line("turn_number", Map.get(ticket, :turn_number) || Map.get(ticket, "turn_number")),
+        render_scalar_line("max_turns", Map.get(ticket, :max_turns) || Map.get(ticket, "max_turns")),
+        render_scalar_line("attempt", Map.get(ticket, :attempt) || Map.get(ticket, "attempt")),
+        render_scalar_line("task_kind", Map.get(ticket, :task_kind) || Map.get(ticket, "task_kind")),
+        render_named_block("Current Implementation Plan", Map.get(ticket, :current_plan) || Map.get(ticket, "current_plan")),
+        render_named_block("Current Builder Workpad", Map.get(ticket, :builder_workpad) || Map.get(ticket, "builder_workpad")),
+        render_named_block("Current Auditor Verdict", Map.get(ticket, :auditor_verdict) || Map.get(ticket, "auditor_verdict")),
+        render_comments_block("Recent Reviewer Discussion", Map.get(ticket, :reviewer_comments) || Map.get(ticket, "reviewer_comments")),
+        render_comments_block("Recent Task Discussion", Map.get(ticket, :comments) || Map.get(ticket, "comments")),
+        render_comments_block("Recent Human Discussion", Map.get(ticket, :human_comments) || Map.get(ticket, "human_comments"))
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    "\n" <> Enum.join(sections, "\n") <> task_operations_suffix(issue, role)
+  end
+
+  defp runtime_contract_suffix do
+    """
+    ## Runtime Contract
+    - The runtime already fetched the current task description, current custom-field values, and the current task comment thread for this turn.
+    - Treat the appended task snapshot as the authoritative live task state for this turn.
+    - If `Recent Task Discussion` is absent, treat the current discussion thread as empty.
+    - Do not run CLI discovery commands such as `lark-cli --help`, `lark-cli api --help`, `lark-cli schema`, or shell completion probes.
+    - Use the exact commands in `## Feishu Task Operations` only when you need a required task mutation or a required re-read.
+    """
+    |> String.trim()
+  end
+
+  defp task_operations_suffix(issue, _role) when is_map(issue) do
+    task_guid = Map.get(issue, :id) || Map.get(issue, "id")
+    tasklist_guid = Map.get(issue, :tasklist_guid) || Map.get(issue, "tasklist_guid")
+    field_guids = Map.get(issue, :task_custom_field_guids) || Map.get(issue, "task_custom_field_guids") || %{}
+    section_guids = Map.get(issue, :task_section_guids_by_name) || Map.get(issue, "task_section_guids_by_name") || %{}
+
+    blocks =
+      [
+        "",
+        "## Feishu Task Operations",
+        render_scalar_line("task_guid", task_guid),
+        render_scalar_line("tasklist_guid", tasklist_guid),
+        render_scalar_line("current_stage", Map.get(issue, :state) || Map.get(issue, "state")),
+        render_scalar_line("current_plan_field_guid", Map.get(field_guids, "Current Plan")),
+        render_scalar_line("builder_workpad_field_guid", Map.get(field_guids, "Builder Workpad")),
+        render_scalar_line("auditor_verdict_field_guid", Map.get(field_guids, "Auditor Verdict")),
+        render_scalar_line("task_kind_field_guid", Map.get(field_guids, "Task Kind")),
+        render_named_block(
+          "Read Task Comments",
+          render_shell_command("""
+          lark-cli api GET /task/v2/comments --as user --params '{"resource_type":"task","resource_id":"#{task_guid}"}'
+          """)
+        ),
+        render_named_block(
+          "Read Task Custom Fields",
+          render_shell_command("""
+          lark-cli api GET /task/v2/custom_fields --as user --params '{"resource_type":"tasklist","resource_id":"#{tasklist_guid}"}'
+          """)
+        ),
+        render_named_block(
+          "Patch Task Custom Fields",
+          render_shell_command("""
+          lark-cli task tasks patch --as user --params '{"task_guid":"#{task_guid}"}' --data '{"update_fields":["custom_fields"],"task":{"custom_fields":[{"guid":"<field-guid>","text_value":"<new text value>"}]}}'
+          """)
+        ),
+        render_named_block(
+          "Add Task Comment",
+          render_shell_command("""
+          lark-cli task +comment --as user --task-id '#{task_guid}' --content 'Planner: ...'
+          """)
+        ),
+        render_named_block(
+          "Move Task Between Stages",
+          render_stage_routing_examples(task_guid, tasklist_guid, section_guids)
+        ),
+        "Use these exact Feishu task endpoints and field GUIDs. Do not invent alternate task comment endpoints."
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    "\n" <> Enum.join(blocks, "\n")
+  end
+
+  defp task_operations_suffix(_issue, _role), do: ""
+
+  defp render_named_block(_title, nil), do: nil
+
+  defp render_named_block(title, body) when is_binary(body) do
+    trimmed = String.trim(body)
+
+    if trimmed == "" do
+      nil
+    else
+      "### #{title}\n#{trimmed}"
+    end
+  end
+
+  defp render_comments_block(_title, comments) when comments in [nil, []], do: nil
+
+  defp render_comments_block(title, comments) when is_list(comments) do
+    rendered_comments =
+      comments
+      |> Enum.take(-8)
+      |> Enum.map(&render_comment_line/1)
+      |> Enum.reject(&is_nil/1)
+
+    if rendered_comments == [] do
+      nil
+    else
+      "### #{title}\n" <> Enum.join(rendered_comments, "\n")
+    end
+  end
+
+  defp render_comment_line(comment) when is_map(comment) do
+    content =
+      comment
+      |> Map.get(:content, Map.get(comment, "content"))
+      |> case do
+        value when is_binary(value) ->
+          value
+          |> String.trim()
+          |> String.replace(~r/\s+/, " ")
+
+        _ ->
+          nil
+      end
+
+    if is_nil(content) or content == "" do
+      nil
+    else
+      created_at = Map.get(comment, :created_at, Map.get(comment, "created_at"))
+      comment_id = Map.get(comment, :id, Map.get(comment, "id"))
+
+      "- [#{created_at || "unknown"}][#{comment_id || "no-id"}] #{content}"
+    end
+  end
+
+  defp render_scalar_line(_label, nil), do: nil
+
+  defp render_scalar_line(label, value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: "- #{label}: #{trimmed}"
+  end
+
+  defp render_scalar_line(label, value) when is_integer(value), do: "- #{label}: #{value}"
+
+  defp render_shell_command(command) when is_binary(command) do
+    trimmed = String.trim(command)
+    if trimmed == "", do: nil, else: "```bash\n#{trimmed}\n```"
+  end
+
+  defp render_stage_routing_examples(task_guid, tasklist_guid, section_guids)
+       when is_binary(task_guid) and is_binary(tasklist_guid) and is_map(section_guids) do
+    stage_lines =
+      section_guids
+      |> Enum.sort_by(fn {stage, _guid} -> stage end)
+      |> Enum.map(fn {stage, section_guid} ->
+        "- #{stage}: `lark-cli api POST /task/v2/tasks/#{task_guid}/add_tasklist --as user --data '{\"tasklist_guid\":\"#{tasklist_guid}\",\"section_guid\":\"#{section_guid}\"}'`"
+      end)
+
+    if stage_lines == [] do
+      nil
+    else
+      Enum.join(stage_lines, "\n")
+    end
+  end
+
+  defp render_stage_routing_examples(_task_guid, _tasklist_guid, _section_guids), do: nil
 end

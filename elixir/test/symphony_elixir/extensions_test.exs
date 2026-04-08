@@ -4,40 +4,10 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
-  alias SymphonyElixir.Linear.Adapter
+  alias SymphonyElixir.Feishu.TaskAdapter
   alias SymphonyElixir.Tracker.Memory
 
   @endpoint SymphonyElixirWeb.Endpoint
-
-  defmodule FakeLinearClient do
-    def fetch_candidate_issues do
-      send(self(), :fetch_candidate_issues_called)
-      {:ok, [:candidate]}
-    end
-
-    def fetch_issues_by_states(states) do
-      send(self(), {:fetch_issues_by_states_called, states})
-      {:ok, states}
-    end
-
-    def fetch_issue_states_by_ids(issue_ids) do
-      send(self(), {:fetch_issue_states_by_ids_called, issue_ids})
-      {:ok, issue_ids}
-    end
-
-    def graphql(query, variables) do
-      send(self(), {:graphql_called, query, variables})
-
-      case Process.get({__MODULE__, :graphql_results}) do
-        [result | rest] ->
-          Process.put({__MODULE__, :graphql_results}, rest)
-          result
-
-        _ ->
-          Process.get({__MODULE__, :graphql_result})
-      end
-    end
-  end
 
   defmodule SlowOrchestrator do
     use GenServer
@@ -78,20 +48,6 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   setup do
-    linear_client_module = Application.get_env(:symphony_elixir, :linear_client_module)
-
-    on_exit(fn ->
-      if is_nil(linear_client_module) do
-        Application.delete_env(:symphony_elixir, :linear_client_module)
-      else
-        Application.put_env(:symphony_elixir, :linear_client_module, linear_client_module)
-      end
-    end)
-
-    :ok
-  end
-
-  setup do
     endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
 
     on_exit(fn ->
@@ -112,7 +68,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       match?({:ok, %{prompt: "Second prompt"}}, Workflow.current())
     end)
 
-    File.write!(Workflow.workflow_file_path(), "---\ntracker: [\n---\nBroken prompt\n")
+    File.write!(Workflow.config_file_path(), "- broken\n")
     assert {:error, _reason} = WorkflowStore.force_reload()
     assert {:ok, %{prompt: "Second prompt"}} = Workflow.current()
 
@@ -127,44 +83,49 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
   end
 
-  test "workflow store init stops on missing workflow file" do
-    missing_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "MISSING_WORKFLOW.md")
-    Workflow.set_workflow_file_path(missing_path)
+  test "workflow store init stops on missing config file" do
+    missing_root = Path.join(System.tmp_dir!(), "missing-config-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(missing_root)
+    Workflow.set_repo_root(missing_root)
 
-    assert {:stop, {:missing_workflow_file, ^missing_path, :enoent}} = WorkflowStore.init([])
+    missing_path = Path.join(missing_root, "SYMPHONY.yml")
+    assert {:stop, {:missing_config_file, ^missing_path, :enoent}} = WorkflowStore.init([])
   end
 
   test "workflow store start_link and poll callback cover missing-file error paths" do
     ensure_workflow_store_running()
     existing_path = Workflow.workflow_file_path()
     manual_path = Path.join(Path.dirname(existing_path), "MANUAL_WORKFLOW.md")
-    missing_path = Path.join(Path.dirname(existing_path), "MANUAL_MISSING_WORKFLOW.md")
+    config_path = Workflow.config_file_path()
+    missing_config_path = Path.join(Path.dirname(existing_path), "MANUAL_MISSING_SYMPHONY.yml")
 
     assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, WorkflowStore)
 
-    Workflow.set_workflow_file_path(missing_path)
+    Application.put_env(:symphony_elixir, :config_file_path, missing_config_path)
 
-    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} =
+    assert {:error, {:missing_config_file, ^missing_config_path, :enoent}} =
              WorkflowStore.force_reload()
 
     write_workflow_file!(manual_path, prompt: "Manual workflow prompt")
     Workflow.set_workflow_file_path(manual_path)
+    Application.delete_env(:symphony_elixir, :config_file_path)
 
     assert {:ok, manual_pid} = WorkflowStore.start_link()
     assert Process.alive?(manual_pid)
 
     state = :sys.get_state(manual_pid)
-    File.write!(manual_path, "---\ntracker: [\n---\nBroken prompt\n")
+    File.write!(config_path, "- broken\n")
     assert {:noreply, returned_state} = WorkflowStore.handle_info(:poll, state)
     assert returned_state.workflow.prompt == "Manual workflow prompt"
     refute returned_state.stamp == nil
     assert_receive :poll, 1_100
 
-    Workflow.set_workflow_file_path(missing_path)
+    Application.put_env(:symphony_elixir, :config_file_path, missing_config_path)
     assert {:noreply, path_error_state} = WorkflowStore.handle_info(:poll, returned_state)
     assert path_error_state.workflow.prompt == "Manual workflow prompt"
     assert_receive :poll, 1_100
 
+    Application.delete_env(:symphony_elixir, :config_file_path)
     Workflow.set_workflow_file_path(manual_path)
     File.rm!(manual_path)
     assert {:noreply, removed_state} = WorkflowStore.handle_info(:poll, path_error_state)
@@ -178,10 +139,11 @@ defmodule SymphonyElixir.ExtensionsTest do
              match?({:error, {:already_started, _pid}}, restart_result)
 
     Workflow.set_workflow_file_path(existing_path)
+    Application.delete_env(:symphony_elixir, :config_file_path)
     WorkflowStore.force_reload()
   end
 
-  test "tracker delegates to memory and linear adapters" do
+  test "tracker delegates to memory and feishu task adapters" do
     issue = %Issue{id: "issue-1", identifier: "MT-1", state: "In Progress"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue, %{id: "ignored"}])
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
@@ -201,122 +163,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert :ok = Memory.create_comment("issue-1", "quiet")
     assert :ok = Memory.update_issue_state("issue-1", "Quiet")
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
-    assert SymphonyElixir.Tracker.adapter() == Adapter
-  end
-
-  test "linear adapter delegates reads and validates mutation responses" do
-    Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
-
-    assert {:ok, [:candidate]} = Adapter.fetch_candidate_issues()
-    assert_receive :fetch_candidate_issues_called
-
-    assert {:ok, ["Todo"]} = Adapter.fetch_issues_by_states(["Todo"])
-    assert_receive {:fetch_issues_by_states_called, ["Todo"]}
-
-    assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(["issue-1"])
-    assert_receive {:fetch_issue_states_by_ids_called, ["issue-1"]}
-
-    Process.put(
-      {FakeLinearClient, :graphql_result},
-      {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
-    )
-
-    assert :ok = Adapter.create_comment("issue-1", "hello")
-    assert_receive {:graphql_called, create_comment_query, %{body: "hello", issueId: "issue-1"}}
-    assert create_comment_query =~ "commentCreate"
-
-    Process.put(
-      {FakeLinearClient, :graphql_result},
-      {:ok, %{"data" => %{"commentCreate" => %{"success" => false}}}}
-    )
-
-    assert {:error, :comment_create_failed} =
-             Adapter.create_comment("issue-1", "broken")
-
-    Process.put({FakeLinearClient, :graphql_result}, {:error, :boom})
-
-    assert {:error, :boom} = Adapter.create_comment("issue-1", "boom")
-
-    Process.put({FakeLinearClient, :graphql_result}, {:ok, %{"data" => %{}}})
-    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "weird")
-
-    Process.put({FakeLinearClient, :graphql_result}, :unexpected)
-    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "odd")
-
-    Process.put(
-      {FakeLinearClient, :graphql_results},
-      [
-        {:ok,
-         %{
-           "data" => %{
-             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
-           }
-         }},
-        {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
-      ]
-    )
-
-    assert :ok = Adapter.update_issue_state("issue-1", "Done")
-    assert_receive {:graphql_called, state_lookup_query, %{issueId: "issue-1", stateName: "Done"}}
-    assert state_lookup_query =~ "states"
-
-    assert_receive {:graphql_called, update_issue_query, %{issueId: "issue-1", stateId: "state-1"}}
-
-    assert update_issue_query =~ "issueUpdate"
-
-    Process.put(
-      {FakeLinearClient, :graphql_results},
-      [
-        {:ok,
-         %{
-           "data" => %{
-             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
-           }
-         }},
-        {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
-      ]
-    )
-
-    assert {:error, :issue_update_failed} =
-             Adapter.update_issue_state("issue-1", "Broken")
-
-    Process.put({FakeLinearClient, :graphql_results}, [{:error, :boom}])
-
-    assert {:error, :boom} = Adapter.update_issue_state("issue-1", "Boom")
-
-    Process.put({FakeLinearClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
-    assert {:error, :state_not_found} = Adapter.update_issue_state("issue-1", "Missing")
-
-    Process.put(
-      {FakeLinearClient, :graphql_results},
-      [
-        {:ok,
-         %{
-           "data" => %{
-             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
-           }
-         }},
-        {:ok, %{"data" => %{}}}
-      ]
-    )
-
-    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Weird")
-
-    Process.put(
-      {FakeLinearClient, :graphql_results},
-      [
-        {:ok,
-         %{
-           "data" => %{
-             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
-           }
-         }},
-        :unexpected
-      ]
-    )
-
-    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "feishu_task", tracker_tasklist_guid: "tasklist-guid")
+    assert SymphonyElixir.Tracker.adapter() == TaskAdapter
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do

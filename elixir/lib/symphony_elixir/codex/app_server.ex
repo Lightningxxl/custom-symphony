@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   """
 
   require Logger
-  alias SymphonyElixir.{Codex.DynamicTool, Config}
+  alias SymphonyElixir.{Codex.DynamicTool, Config, Workflow}
 
   @initialize_id 1
   @thread_start_id 2
@@ -26,7 +26,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   @spec run(Path.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(workspace, prompt, issue, opts \\ []) do
-    with {:ok, session} <- start_session(workspace) do
+    with {:ok, session} <- start_session(workspace, opts) do
       try do
         run_turn(session, prompt, issue, opts)
       after
@@ -35,9 +35,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  @spec start_session(Path.t()) :: {:ok, session()} | {:error, term()}
-  def start_session(workspace) do
-    with :ok <- validate_workspace_cwd(workspace),
+  @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
+  def start_session(workspace, opts \\ []) do
+    with :ok <- validate_workspace_cwd(workspace, opts),
          {:ok, port} <- start_port(workspace) do
       metadata = port_metadata(port)
       expanded_workspace = Path.expand(workspace)
@@ -141,18 +141,26 @@ defmodule SymphonyElixir.Codex.AppServer do
     stop_port(port)
   end
 
-  defp validate_workspace_cwd(workspace) when is_binary(workspace) do
+  defp validate_workspace_cwd(workspace, opts) when is_binary(workspace) do
     workspace_path = Path.expand(workspace)
     workspace_root = Path.expand(Config.workspace_root())
+    repo_root = Path.expand(Workflow.repo_root())
+    allow_repo_root = Keyword.get(opts, :allow_repo_root, false)
 
     root_prefix = workspace_root <> "/"
+    repo_prefix = repo_root <> "/"
 
     cond do
       workspace_path == workspace_root ->
         {:error, {:invalid_workspace_cwd, :workspace_root, workspace_path}}
 
       not String.starts_with?(workspace_path <> "/", root_prefix) ->
-        {:error, {:invalid_workspace_cwd, :outside_workspace_root, workspace_path, workspace_root}}
+        if allow_repo_root and
+             (workspace_path == repo_root or String.starts_with?(workspace_path <> "/", repo_prefix)) do
+          :ok
+        else
+          {:error, {:invalid_workspace_cwd, :outside_workspace_root, workspace_path, workspace_root}}
+        end
 
       true ->
         :ok

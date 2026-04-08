@@ -16,6 +16,7 @@ defmodule SymphonyElixir.StatusDashboard do
   @throughput_graph_columns 24
   @sparkline_blocks ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
   @running_id_width 8
+  @running_role_width 9
   @running_stage_width 14
   @running_pid_width 8
   @running_age_width 12
@@ -331,7 +332,7 @@ defmodule SymphonyElixir.StatusDashboard do
     case snapshot_data do
       {:ok, %{running: running, retrying: retrying, codex_totals: codex_totals} = snapshot} ->
         rate_limits = Map.get(snapshot, :rate_limits)
-        project_link_lines = format_project_link_lines()
+        project_link_lines = format_tracker_link_lines()
         project_refresh_line = format_project_refresh_line(Map.get(snapshot, :polling))
         codex_input_tokens = Map.get(codex_totals, :input_tokens, 0)
         codex_output_tokens = Map.get(codex_totals, :output_tokens, 0)
@@ -380,7 +381,7 @@ defmodule SymphonyElixir.StatusDashboard do
           colorize("╭─ SYMPHONY STATUS", @ansi_bold),
           colorize("│ Orchestrator snapshot unavailable", @ansi_red),
           colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
-          format_project_link_lines(),
+          format_tracker_link_lines(),
           format_project_refresh_line(nil),
           closing_border()
         ]
@@ -389,24 +390,27 @@ defmodule SymphonyElixir.StatusDashboard do
     end
   end
 
-  defp format_project_link_lines do
-    project_part =
-      case Config.linear_project_slug() do
-        project_slug when is_binary(project_slug) and project_slug != "" ->
-          colorize(linear_project_url(project_slug), @ansi_cyan)
+  defp format_tracker_link_lines do
+    tracker_part =
+      case {Config.tracker_kind(), Config.feishu_tasklist_guid()} do
+        {kind, guid} when is_binary(kind) and kind != "" and is_binary(guid) and guid != "" ->
+          colorize("#{kind}:#{guid}", @ansi_cyan)
+
+        {kind, _guid} when is_binary(kind) and kind != "" ->
+          colorize(kind, @ansi_cyan)
 
         _ ->
           colorize("n/a", @ansi_gray)
       end
 
-    project_line = colorize("│ Project: ", @ansi_bold) <> project_part
+    tracker_line = colorize("│ Tracker: ", @ansi_bold) <> tracker_part
 
     case dashboard_url() do
       url when is_binary(url) ->
-        [project_line, colorize("│ Dashboard: ", @ansi_bold) <> colorize(url, @ansi_cyan)]
+        [tracker_line, colorize("│ Dashboard: ", @ansi_bold) <> colorize(url, @ansi_cyan)]
 
       _ ->
-        [project_line]
+        [tracker_line]
     end
   end
 
@@ -423,8 +427,6 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_project_refresh_line(_) do
     colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
   end
-
-  defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
 
   defp dashboard_url do
     dashboard_url(Config.server_host(), Config.server_port(), HttpServer.bound_port())
@@ -586,6 +588,7 @@ defmodule SymphonyElixir.StatusDashboard do
   # credo:disable-for-next-line
   defp format_running_summary(running_entry, running_event_width) do
     issue = format_cell(running_entry.identifier || "unknown", @running_id_width)
+    role = running_entry.role |> format_role() |> format_cell(@running_role_width)
     state = running_entry.state || "unknown"
     state_display = format_cell(to_string(state), @running_stage_width)
     session = running_entry.session_id |> compact_session_id() |> format_cell(@running_session_width)
@@ -608,11 +611,15 @@ defmodule SymphonyElixir.StatusDashboard do
         _ -> @ansi_blue
       end
 
+    role_color = lane_color(running_entry.role)
+
     [
       "│ ",
       status_dot(status_color),
       " ",
       colorize(issue, @ansi_cyan),
+      " ",
+      colorize(role, role_color),
       " ",
       colorize(state_display, status_color),
       " ",
@@ -737,6 +744,7 @@ defmodule SymphonyElixir.StatusDashboard do
     header =
       [
         format_cell("ID", @running_id_width),
+        format_cell("ROLE", @running_role_width),
         format_cell("STAGE", @running_stage_width),
         format_cell("PID", @running_pid_width),
         format_cell("AGE / TURN", @running_age_width),
@@ -752,6 +760,7 @@ defmodule SymphonyElixir.StatusDashboard do
   defp running_table_separator_row(running_event_width) do
     separator_width =
       @running_id_width +
+        @running_role_width +
         @running_stage_width +
         @running_pid_width +
         @running_age_width +
@@ -773,12 +782,35 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp fixed_running_width do
     @running_id_width +
+      @running_role_width +
       @running_stage_width +
       @running_pid_width +
       @running_age_width +
       @running_tokens_width +
       @running_session_width
   end
+
+  defp format_role(role) when role in [:planner, :builder, :auditor] do
+    role
+    |> Atom.to_string()
+    |> String.upcase()
+  end
+
+  defp format_role(role) when is_binary(role) do
+    role
+    |> String.trim()
+    |> String.upcase()
+  end
+
+  defp format_role(_role), do: "UNKNOWN"
+
+  defp lane_color(:planner), do: @ansi_blue
+  defp lane_color(:builder), do: @ansi_green
+  defp lane_color(:auditor), do: @ansi_magenta
+  defp lane_color("planner"), do: @ansi_blue
+  defp lane_color("builder"), do: @ansi_green
+  defp lane_color("auditor"), do: @ansi_magenta
+  defp lane_color(_role), do: @ansi_gray
 
   defp terminal_columns do
     case :io.columns() do
