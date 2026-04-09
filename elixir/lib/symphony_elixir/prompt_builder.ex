@@ -101,6 +101,7 @@ defmodule SymphonyElixir.PromptBuilder do
         render_scalar_line("task_kind", Map.get(ticket, :task_kind) || Map.get(ticket, "task_kind")),
         render_scalar_line("workflow_active_role", Map.get(ticket, :workflow_active_role) || Map.get(ticket, "workflow_active_role")),
         render_scalar_line("workflow_building_phase", Map.get(ticket, :workflow_building_phase) || Map.get(ticket, "workflow_building_phase")),
+        render_scalar_line("current_pr", Map.get(ticket, :pr_url) || Map.get(ticket, "pr_url")),
         render_named_block("Current Implementation Plan", Map.get(ticket, :current_plan) || Map.get(ticket, "current_plan")),
         render_named_block("Current Builder Workpad", Map.get(ticket, :builder_workpad) || Map.get(ticket, "builder_workpad")),
         render_named_block("Current Auditor Verdict", Map.get(ticket, :auditor_verdict) || Map.get(ticket, "auditor_verdict")),
@@ -142,6 +143,7 @@ defmodule SymphonyElixir.PromptBuilder do
         render_scalar_line("current_plan_field_guid", Map.get(field_guids, "Current Plan")),
         render_scalar_line("builder_workpad_field_guid", Map.get(field_guids, "Builder Workpad")),
         render_scalar_line("auditor_verdict_field_guid", Map.get(field_guids, "Auditor Verdict")),
+        render_scalar_line("pr_field_guid", Map.get(field_guids, "PR")),
         render_scalar_line("task_kind_field_guid", Map.get(field_guids, "Task Kind")),
         render_named_block("Current Internal Hook", render_internal_hook_summary(extra)),
         render_named_block(

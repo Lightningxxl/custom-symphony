@@ -587,7 +587,11 @@ defmodule SymphonyElixir.StatusDashboard do
 
   # credo:disable-for-next-line
   defp format_running_summary(running_entry, running_event_width) do
-    issue = format_cell(running_entry.identifier || "unknown", @running_id_width)
+    issue =
+      running_entry.identifier
+      |> display_identifier()
+      |> format_cell(@running_id_width)
+
     role = running_entry.role |> format_role() |> format_cell(@running_role_width)
     state = running_entry.state || "unknown"
     state_display = format_cell(to_string(state), @running_stage_width)
@@ -662,7 +666,7 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_retry_summary(retry_entry) do
     issue_id = retry_entry.issue_id || "unknown"
-    identifier = retry_entry.identifier || issue_id
+    identifier = retry_entry.identifier |> display_identifier(issue_id)
     attempt = retry_entry.attempt || 0
     due_in_ms = retry_entry.due_in_ms || 0
     error = format_retry_error(retry_entry.error)
@@ -704,6 +708,29 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp format_retry_error(_), do: ""
+
+  defp display_identifier(value, fallback \\ "unknown")
+
+  defp display_identifier(value, fallback) when is_binary(value) do
+    value
+    |> String.trim()
+    |> case do
+      "" ->
+        fallback
+
+      trimmed ->
+        trimmed
+        |> String.split("/", trim: true)
+        |> List.last()
+        |> case do
+          nil -> fallback
+          "" -> fallback
+          short -> short
+        end
+    end
+  end
+
+  defp display_identifier(_value, fallback), do: fallback
 
   defp format_runtime_seconds(seconds) when is_integer(seconds) do
     mins = div(seconds, 60)

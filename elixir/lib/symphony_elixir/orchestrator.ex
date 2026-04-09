@@ -960,7 +960,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp builder_phase_for_mode("pickup"), do: "pickup"
   defp builder_phase_for_mode("rework"), do: "rework"
-  defp builder_phase_for_mode("merge"), do: "execute"
+  defp builder_phase_for_mode("merge"), do: "merge"
   defp builder_phase_for_mode(_mode), do: "execute"
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)

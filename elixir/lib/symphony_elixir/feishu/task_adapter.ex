@@ -13,6 +13,7 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
   @current_plan_field "Current Plan"
   @builder_workpad_field "Builder Workpad"
   @auditor_verdict_field "Auditor Verdict"
+  @pr_field "PR"
   @task_kind_field "Task Kind"
   @task_key_field "Task Key"
   @backlog_stage "Backlog"
@@ -144,6 +145,7 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
       current_plan: custom_field_text(custom_fields, @current_plan_field),
       builder_workpad: custom_field_text(custom_fields, @builder_workpad_field),
       auditor_verdict: custom_field_text(custom_fields, @auditor_verdict_field),
+      pr_url: custom_field_text(custom_fields, @pr_field),
       task_kind: custom_field_single_select(custom_fields, @task_kind_field, Map.get(context, :task_kind_options_by_guid, %{})),
       comments: normalize_comments(comments),
       tracker_payload: task,
