@@ -457,22 +457,40 @@ defmodule SymphonyElixir.StatusDashboard do
           ""
       end
 
-    colorize("│ Repo sync: ", @ansi_bold) <>
+    colorize("│ Last repo sync: ", @ansi_bold) <>
       colorize("#{phase_label} ", @ansi_gray) <>
       colorize(status_text, status_color) <>
-      colorize(format_repo_sync_timestamp(Map.get(repo_sync, :at)), @ansi_dim) <>
+      colorize(format_repo_sync_elapsed(Map.get(repo_sync, :at)), @ansi_dim) <>
       detail_suffix
   end
 
   defp format_repo_sync_line(_) do
-    colorize("│ Repo sync: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
+    colorize("│ Last repo sync: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
   end
 
-  defp format_repo_sync_timestamp(%DateTime{} = datetime) do
-    " @ " <> Calendar.strftime(datetime, "%H:%M:%S")
+  defp format_repo_sync_elapsed(%DateTime{} = datetime) do
+    " " <> relative_time_ago(DateTime.diff(DateTime.utc_now(), datetime, :second))
   end
 
-  defp format_repo_sync_timestamp(_), do: ""
+  defp format_repo_sync_elapsed(_), do: ""
+
+  defp relative_time_ago(seconds) when is_integer(seconds) and seconds < 60 do
+    "#{max(seconds, 0)}s ago"
+  end
+
+  defp relative_time_ago(seconds) when is_integer(seconds) and seconds < 3_600 do
+    "#{div(max(seconds, 0), 60)}m ago"
+  end
+
+  defp relative_time_ago(seconds) when is_integer(seconds) and seconds < 86_400 do
+    "#{div(max(seconds, 0), 3_600)}h ago"
+  end
+
+  defp relative_time_ago(seconds) when is_integer(seconds) do
+    "#{div(max(seconds, 0), 86_400)}d ago"
+  end
+
+  defp relative_time_ago(_seconds), do: "n/a"
 
   defp dashboard_url do
     dashboard_url(Config.server_host(), Config.server_port(), HttpServer.bound_port())

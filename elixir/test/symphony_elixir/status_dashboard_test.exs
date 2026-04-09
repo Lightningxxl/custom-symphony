@@ -16,14 +16,15 @@ defmodule SymphonyElixir.StatusDashboardTest do
            repo_sync: %{
              phase: :startup,
              status: :pulled,
-             at: ~U[2026-04-09 08:00:00Z]
+             at: DateTime.add(DateTime.utc_now(), -120, :second)
            }
          }},
         0.0
       )
 
-    assert content =~ "Repo sync:"
+    assert content =~ "Last repo sync:"
     assert content =~ "startup"
     assert content =~ "pulled latest"
+    assert content =~ "ago"
   end
 end
