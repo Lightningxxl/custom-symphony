@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ELIXIR_DIR="$ROOT_DIR/elixir"
-TARGET_REPO="${1:-${SYMPHONY_TARGET_REPO:-$PWD}}"
+TARGET_REPO_INPUT="${1:-${SYMPHONY_TARGET_REPO:-$PWD}}"
 
 required_files=(
   "SYMPHONY.yml"
@@ -17,10 +17,12 @@ if ! command -v mise >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -d "$TARGET_REPO" ]]; then
-  echo "error: target repo not found: $TARGET_REPO"
+if [[ ! -d "$TARGET_REPO_INPUT" ]]; then
+  echo "error: target repo not found: $TARGET_REPO_INPUT"
   exit 1
 fi
+
+TARGET_REPO="$(cd "$TARGET_REPO_INPUT" && pwd)"
 
 for required_file in "${required_files[@]}"; do
   if [[ ! -f "$TARGET_REPO/$required_file" ]]; then

@@ -16,6 +16,7 @@ defmodule SymphonyElixir.CLI do
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
+          sync_repo: (String.t() -> :ok | {:error, term()}),
           ensure_all_started: (-> ensure_started_result())
         }
 
@@ -79,7 +80,10 @@ defmodule SymphonyElixir.CLI do
 
           true ->
             :ok = deps.set_repo_root.(expanded_path)
-            ensure_started(expanded_path, deps)
+
+            with :ok <- deps.sync_repo.(expanded_path) do
+              ensure_started(expanded_path, deps)
+            end
         end
 
       deps.file_regular?.(expanded_path) ->
@@ -121,6 +125,7 @@ defmodule SymphonyElixir.CLI do
       set_workflow_file_path: &SymphonyElixir.Workflow.set_workflow_file_path/1,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,
+      sync_repo: &sync_repo/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end
     }
   end
@@ -132,6 +137,13 @@ defmodule SymphonyElixir.CLI do
 
       {:error, reason} ->
         {:error, "Failed to start Symphony with target #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  defp sync_repo(repo_root) when is_binary(repo_root) do
+    case SymphonyElixir.CanonicalRepo.ensure_ready(repo_root) do
+      {:ok, _status} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 

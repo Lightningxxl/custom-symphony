@@ -10,12 +10,14 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.{
     AuditorRunner,
     BuilderRunner,
+    CanonicalRepo,
     Config,
     Feishu.TaskState,
     PlannerRunner,
     PlannerSessions,
     StatusDashboard,
     Tracker,
+    Workflow,
     Workspace
   }
 
@@ -1459,6 +1461,8 @@ defmodule SymphonyElixir.Orchestrator do
 
     case role do
       :builder ->
+        maybe_sync_canonical_repo_after_merge(running_entry)
+
         Logger.info("Builder task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
 
         state
@@ -1508,6 +1512,28 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp maybe_record_role_progress(_running_entry, _role), do: :ok
+
+  defp maybe_sync_canonical_repo_after_merge(%{issue: %Issue{state: state_name, identifier: identifier}})
+       when is_binary(state_name) do
+    if normalize_issue_state(state_name) == "merging" do
+      repo_root = Workflow.repo_root()
+
+      case CanonicalRepo.ensure_ready(repo_root) do
+        {:ok, :up_to_date} ->
+          Logger.info("Canonical planner repo already up to date after merge for #{identifier}")
+
+        {:ok, :pulled} ->
+          Logger.info("Canonical planner repo fast-forwarded after merge for #{identifier}")
+
+        {:error, reason} ->
+          Logger.warning("Failed to sync canonical planner repo after merge for #{identifier}: #{reason}")
+      end
+    else
+      :ok
+    end
+  end
+
+  defp maybe_sync_canonical_repo_after_merge(_running_entry), do: :ok
 
   defp issue_role(%Issue{} = issue) do
     TaskState.role_for_issue(issue) || Config.issue_role(issue.state)

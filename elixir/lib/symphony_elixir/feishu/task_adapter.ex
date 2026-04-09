@@ -140,6 +140,7 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
       task_section_guid: section_guid,
       task_section_guids_by_name: Map.get(context, :section_guids_by_name, %{}),
       task_custom_field_guids: Map.get(context, :custom_field_guids_by_name, %{}),
+      task_kind_option_guids: Map.get(context, :task_kind_option_guids_by_name, %{}),
       task_status: Map.get(task, "status"),
       extra: extra,
       current_plan: custom_field_text(custom_fields, @current_plan_field),
@@ -171,7 +172,8 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
          section_guids_by_name: section_guids_by_name(sections),
          default_section_guids: default_section_guids(sections),
          custom_field_guids_by_name: custom_field_guids_by_name(custom_fields),
-         task_kind_options_by_guid: task_kind_options_by_guid(custom_fields)
+         task_kind_options_by_guid: task_kind_options_by_guid(custom_fields),
+         task_kind_option_guids_by_name: task_kind_option_guids_by_name(custom_fields)
        }}
     end
   end
@@ -332,6 +334,21 @@ defmodule SymphonyElixir.Feishu.TaskAdapter do
         |> get_in(["single_select_setting", "options"])
         |> List.wrap()
         |> Map.new(fn option -> {Map.get(option, "guid"), Map.get(option, "name")} end)
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp task_kind_option_guids_by_name(custom_fields) when is_list(custom_fields) do
+    custom_fields
+    |> Enum.find(fn field -> Map.get(field, "name") == @task_kind_field end)
+    |> case do
+      %{} = field ->
+        field
+        |> get_in(["single_select_setting", "options"])
+        |> List.wrap()
+        |> Map.new(fn option -> {Map.get(option, "name"), Map.get(option, "guid")} end)
 
       _ ->
         %{}

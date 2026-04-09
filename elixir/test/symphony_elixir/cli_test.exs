@@ -33,6 +33,10 @@ defmodule SymphonyElixir.CLITest do
         send(parent, :port_set)
         :ok
       end,
+      sync_repo: fn _path ->
+        send(parent, :repo_synced)
+        :ok
+      end,
       ensure_all_started: fn ->
         send(parent, :started)
         {:ok, [:symphony_elixir]}
@@ -50,6 +54,7 @@ defmodule SymphonyElixir.CLITest do
     refute_received :workflow_set
     refute_received :logs_root_set
     refute_received :port_set
+    refute_received :repo_synced
     refute_received :started
   end
 
@@ -61,6 +66,7 @@ defmodule SymphonyElixir.CLITest do
       set_workflow_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      sync_repo: fn _path -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
@@ -88,6 +94,7 @@ defmodule SymphonyElixir.CLITest do
       end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      sync_repo: fn _path -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
@@ -109,6 +116,7 @@ defmodule SymphonyElixir.CLITest do
         :ok
       end,
       set_server_port_override: fn _port -> :ok end,
+      sync_repo: fn _path -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
@@ -125,6 +133,7 @@ defmodule SymphonyElixir.CLITest do
       set_workflow_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      sync_repo: fn _path -> :ok end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
@@ -140,6 +149,7 @@ defmodule SymphonyElixir.CLITest do
       set_workflow_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      sync_repo: fn _path -> :ok end,
       ensure_all_started: fn -> {:error, :boom} end
     }
 
@@ -164,12 +174,32 @@ defmodule SymphonyElixir.CLITest do
       set_workflow_file_path: fn _path -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
+      sync_repo: fn path ->
+        send(parent, {:repo_synced, path})
+        :ok
+      end,
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
     assert :ok = CLI.evaluate([@ack_flag, "tmp/repo"], deps)
     assert_received {:dir_checked, expanded_repo}
     assert_received {:repo_root_set, ^expanded_repo}
+    assert_received {:repo_synced, ^expanded_repo}
     assert expanded_repo == Path.expand("tmp/repo")
+  end
+
+  test "returns startup check error when canonical repo sync fails" do
+    deps = %{
+      dir?: fn path -> path == Path.expand("tmp/repo") end,
+      file_regular?: fn _path -> true end,
+      set_repo_root: fn _path -> :ok end,
+      set_workflow_file_path: fn _path -> :ok end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      sync_repo: fn _path -> {:error, "repo is dirty"} end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    assert {:error, "repo is dirty"} = CLI.evaluate([@ack_flag, "tmp/repo"], deps)
   end
 end

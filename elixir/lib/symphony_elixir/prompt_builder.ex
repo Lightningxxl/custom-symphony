@@ -130,6 +130,7 @@ defmodule SymphonyElixir.PromptBuilder do
     task_guid = Map.get(issue, :id) || Map.get(issue, "id")
     tasklist_guid = Map.get(issue, :tasklist_guid) || Map.get(issue, "tasklist_guid")
     field_guids = Map.get(issue, :task_custom_field_guids) || Map.get(issue, "task_custom_field_guids") || %{}
+    task_kind_option_guids = Map.get(issue, :task_kind_option_guids) || Map.get(issue, "task_kind_option_guids") || %{}
     section_guids = Map.get(issue, :task_section_guids_by_name) || Map.get(issue, "task_section_guids_by_name") || %{}
     extra = Map.get(issue, :extra) || Map.get(issue, "extra")
 
@@ -163,6 +164,10 @@ defmodule SymphonyElixir.PromptBuilder do
           render_shell_command("""
           lark-cli task tasks patch --as user --params '{"task_guid":"#{task_guid}"}' --data '{"update_fields":["custom_fields"],"task":{"custom_fields":[{"guid":"<field-guid>","text_value":"<new text value>"}]}}'
           """)
+        ),
+        render_named_block(
+          "Set Task Kind (single-select)",
+          render_task_kind_commands(task_guid, Map.get(field_guids, "Task Kind"), task_kind_option_guids)
         ),
         render_named_block(
           "Add Task Comment",
@@ -263,6 +268,36 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   defp render_scalar_line(label, value) when is_integer(value), do: "- #{label}: #{value}"
+
+  defp render_task_kind_commands(_task_guid, nil, _task_kind_option_guids), do: nil
+
+  defp render_task_kind_commands(task_guid, task_kind_field_guid, task_kind_option_guids)
+       when is_binary(task_guid) and is_binary(task_kind_field_guid) and is_map(task_kind_option_guids) do
+    lines =
+      task_kind_option_guids
+      |> Enum.sort_by(fn {name, _guid} -> String.downcase(to_string(name)) end)
+      |> Enum.map(fn {name, option_guid} ->
+        render_task_kind_command(task_guid, task_kind_field_guid, name, option_guid)
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    case lines do
+      [] -> nil
+      _ -> Enum.join(lines, "\n\n")
+    end
+  end
+
+  defp render_task_kind_command(_task_guid, _field_guid, _name, nil), do: nil
+
+  defp render_task_kind_command(task_guid, field_guid, name, option_guid) do
+    """
+    Set `Task Kind` to `#{name}`:
+    #{render_shell_command("""
+    lark-cli task tasks patch --as user --params '{"task_guid":"#{task_guid}"}' --data '{"update_fields":["custom_fields"],"task":{"custom_fields":[{"guid":"#{field_guid}","single_select_value":"#{option_guid}"}]}}'
+    """)}
+    """
+    |> String.trim()
+  end
 
   defp render_shell_command(command) when is_binary(command) do
     trimmed = String.trim(command)

@@ -225,7 +225,7 @@ defmodule SymphonyElixir.Feishu.TaskState do
 
   @spec planning_fingerprint(Item.t()) :: String.t()
   def planning_fingerprint(%Item{} = issue) do
-    sha256(join_inputs([issue.description, issue.task_kind, comment_fingerprint(issue.comments || [])]))
+    sha256(join_inputs([issue.description, comment_fingerprint(issue.comments || [])]))
   end
 
   @spec review_fingerprint(Item.t()) :: String.t()

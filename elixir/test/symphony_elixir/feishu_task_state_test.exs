@@ -39,6 +39,30 @@ defmodule SymphonyElixir.FeishuTaskStateTest do
     assert TaskState.planner_pending?(changed_issue)
   end
 
+  test "planner-owned task kind changes do not retrigger planning by themselves" do
+    issue = %Issue{
+      id: "task-kind-1",
+      identifier: "t100099",
+      title: "Bug: fix planner task kind sync",
+      description: "Need planner to classify this task first.",
+      state: "Planning",
+      task_kind: nil,
+      extra: nil,
+      current_plan: "Plan is ready.",
+      comments: []
+    }
+
+    marked_issue = %Issue{
+      issue
+      | extra: TaskState.mark_role_processed(issue, :planner)
+    }
+
+    refute TaskState.planner_pending?(marked_issue)
+
+    planner_updated_kind = %Issue{marked_issue | task_kind: "bug"}
+    refute TaskState.planner_pending?(planner_updated_kind)
+  end
+
   test "auditor pending tracks builder workpad changes" do
     issue = %Issue{
       id: "task-2",
