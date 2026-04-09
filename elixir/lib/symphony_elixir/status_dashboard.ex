@@ -334,6 +334,7 @@ defmodule SymphonyElixir.StatusDashboard do
         rate_limits = Map.get(snapshot, :rate_limits)
         project_link_lines = format_tracker_link_lines()
         project_refresh_line = format_project_refresh_line(Map.get(snapshot, :polling))
+        repo_sync_line = format_repo_sync_line(Map.get(snapshot, :repo_sync))
         codex_input_tokens = Map.get(codex_totals, :input_tokens, 0)
         codex_output_tokens = Map.get(codex_totals, :output_tokens, 0)
         codex_total_tokens = Map.get(codex_totals, :total_tokens, 0)
@@ -363,6 +364,7 @@ defmodule SymphonyElixir.StatusDashboard do
            colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
            project_link_lines,
            project_refresh_line,
+           repo_sync_line,
            colorize("├─ Running", @ansi_bold),
            "│",
            running_table_header_row(running_event_width),
@@ -383,6 +385,7 @@ defmodule SymphonyElixir.StatusDashboard do
           colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
           format_tracker_link_lines(),
           format_project_refresh_line(nil),
+          format_repo_sync_line(nil),
           closing_border()
         ]
         |> List.flatten()
@@ -427,6 +430,49 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_project_refresh_line(_) do
     colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
   end
+
+  defp format_repo_sync_line(%{phase: phase, status: status} = repo_sync) do
+    phase_label =
+      case phase do
+        :startup -> "startup"
+        :merge -> "post-merge"
+        other -> to_string(other)
+      end
+
+    {status_text, status_color} =
+      case status do
+        :checking -> {"checking…", @ansi_cyan}
+        :up_to_date -> {"up to date", @ansi_green}
+        :pulled -> {"pulled latest", @ansi_green}
+        :error -> {"sync failed", @ansi_red}
+        other -> {to_string(other), @ansi_gray}
+      end
+
+    detail_suffix =
+      case Map.get(repo_sync, :detail) do
+        detail when is_binary(detail) and detail != "" ->
+          colorize(" (#{String.slice(detail, 0, 80)})", @ansi_dim)
+
+        _ ->
+          ""
+      end
+
+    colorize("│ Repo sync: ", @ansi_bold) <>
+      colorize("#{phase_label} ", @ansi_gray) <>
+      colorize(status_text, status_color) <>
+      colorize(format_repo_sync_timestamp(Map.get(repo_sync, :at)), @ansi_dim) <>
+      detail_suffix
+  end
+
+  defp format_repo_sync_line(_) do
+    colorize("│ Repo sync: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
+  end
+
+  defp format_repo_sync_timestamp(%DateTime{} = datetime) do
+    " @ " <> Calendar.strftime(datetime, "%H:%M:%S")
+  end
+
+  defp format_repo_sync_timestamp(_), do: ""
 
   defp dashboard_url do
     dashboard_url(Config.server_host(), Config.server_port(), HttpServer.bound_port())
@@ -561,7 +607,8 @@ defmodule SymphonyElixir.StatusDashboard do
              retrying: retrying,
              codex_totals: codex_totals,
              rate_limits: Map.get(snapshot, :rate_limits),
-             polling: Map.get(snapshot, :polling)
+             polling: Map.get(snapshot, :polling),
+             repo_sync: Map.get(snapshot, :repo_sync)
            }}
 
         _ ->

@@ -46,6 +46,7 @@ defmodule SymphonyElixir.Orchestrator do
       :next_poll_due_at_ms,
       :poll_check_in_progress,
       :poll_task_ref,
+      :last_repo_sync_status,
       running: %{},
       completed: MapSet.new(),
       claimed: MapSet.new(),
@@ -71,6 +72,7 @@ defmodule SymphonyElixir.Orchestrator do
       next_poll_due_at_ms: now_ms,
       poll_check_in_progress: false,
       poll_task_ref: nil,
+      last_repo_sync_status: Application.get_env(:symphony_elixir, :last_repo_sync_status),
       codex_totals: @empty_codex_totals,
       codex_rate_limits: nil
     }
@@ -1290,6 +1292,7 @@ defmodule SymphonyElixir.Orchestrator do
        retrying: retrying,
        codex_totals: state.codex_totals,
        rate_limits: Map.get(state, :codex_rate_limits),
+       repo_sync: state.last_repo_sync_status,
        polling: %{
          checking?: state.poll_check_in_progress == true,
          next_poll_in_ms: next_poll_in_ms(state.next_poll_due_at_ms, now_ms),
@@ -1461,7 +1464,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case role do
       :builder ->
-        maybe_sync_canonical_repo_after_merge(running_entry)
+        state = maybe_sync_canonical_repo_after_merge(state, running_entry)
 
         Logger.info("Builder task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
 
@@ -1513,27 +1516,52 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp maybe_record_role_progress(_running_entry, _role), do: :ok
 
-  defp maybe_sync_canonical_repo_after_merge(%{issue: %Issue{state: state_name, identifier: identifier}})
+  defp maybe_sync_canonical_repo_after_merge(
+         %State{} = state,
+         %{issue: %Issue{state: state_name, identifier: identifier}}
+       )
        when is_binary(state_name) do
     if normalize_issue_state(state_name) == "merging" do
       repo_root = Workflow.repo_root()
+      checking_status = repo_sync_status(:merge, :checking, repo_root, nil)
+      Application.put_env(:symphony_elixir, :last_repo_sync_status, checking_status)
+      notify_dashboard()
 
       case CanonicalRepo.ensure_ready(repo_root) do
         {:ok, :up_to_date} ->
           Logger.info("Canonical planner repo already up to date after merge for #{identifier}")
+          set_repo_sync_status(state, repo_sync_status(:merge, :up_to_date, repo_root, nil))
 
         {:ok, :pulled} ->
           Logger.info("Canonical planner repo fast-forwarded after merge for #{identifier}")
+          set_repo_sync_status(state, repo_sync_status(:merge, :pulled, repo_root, nil))
 
         {:error, reason} ->
           Logger.warning("Failed to sync canonical planner repo after merge for #{identifier}: #{reason}")
+          set_repo_sync_status(state, repo_sync_status(:merge, :error, repo_root, reason))
       end
     else
-      :ok
+      state
     end
   end
 
-  defp maybe_sync_canonical_repo_after_merge(_running_entry), do: :ok
+  defp maybe_sync_canonical_repo_after_merge(%State{} = state, _running_entry), do: state
+
+  defp set_repo_sync_status(%State{} = state, status) when is_map(status) do
+    Application.put_env(:symphony_elixir, :last_repo_sync_status, status)
+    notify_dashboard()
+    %{state | last_repo_sync_status: status}
+  end
+
+  defp repo_sync_status(phase, status, repo_root, detail) do
+    %{
+      phase: phase,
+      status: status,
+      repo_root: repo_root,
+      detail: detail,
+      at: DateTime.utc_now()
+    }
+  end
 
   defp issue_role(%Issue{} = issue) do
     TaskState.role_for_issue(issue) || Config.issue_role(issue.state)
