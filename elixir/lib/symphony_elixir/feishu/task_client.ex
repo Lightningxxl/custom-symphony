@@ -130,17 +130,42 @@ defmodule SymphonyElixir.Feishu.TaskClient do
   defp run_cli(args) when is_list(args) do
     executable = Config.lark_cli_command()
     full_args = args ++ identity_args()
+    timeout_ms = Config.lark_cli_timeout_ms()
 
-    case System.cmd(executable, full_args, stderr_to_stdout: true) do
-      {output, 0} ->
+    case run_command(executable, full_args, timeout_ms) do
+      {:ok, {output, 0}} ->
         decode_cli_output(output)
 
-      {output, status} ->
+      {:ok, {output, status}} ->
         {:error, {:lark_cli_failed, status, output}}
+
+      {:error, _reason} = error ->
+        error
     end
   rescue
     error in ErlangError ->
       {:error, {:lark_cli_spawn_failed, error.original}}
+  end
+
+  @doc false
+  def run_command(executable, full_args, timeout_ms)
+      when is_binary(executable) and is_list(full_args) and is_integer(timeout_ms) and timeout_ms > 0 do
+    task =
+      Task.async(fn ->
+        System.cmd(executable, full_args, stderr_to_stdout: true)
+      end)
+
+    case Task.yield(task, timeout_ms) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:exit, reason} ->
+        {:error, {:lark_cli_task_exit, reason}}
+
+      nil ->
+        Task.shutdown(task, :brutal_kill)
+        {:error, {:lark_cli_timeout, timeout_ms, [executable | full_args]}}
+    end
   end
 
   defp identity_args do

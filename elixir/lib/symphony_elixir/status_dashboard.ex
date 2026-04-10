@@ -334,6 +334,7 @@ defmodule SymphonyElixir.StatusDashboard do
         rate_limits = Map.get(snapshot, :rate_limits)
         project_link_lines = format_tracker_link_lines()
         project_refresh_line = format_project_refresh_line(Map.get(snapshot, :polling))
+        poll_summary_line = format_last_poll_line(Map.get(snapshot, :polling))
         repo_sync_line = format_repo_sync_line(Map.get(snapshot, :repo_sync))
         codex_input_tokens = Map.get(codex_totals, :input_tokens, 0)
         codex_output_tokens = Map.get(codex_totals, :output_tokens, 0)
@@ -364,6 +365,7 @@ defmodule SymphonyElixir.StatusDashboard do
            colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
            project_link_lines,
            project_refresh_line,
+           poll_summary_line,
            repo_sync_line,
            colorize("├─ Running", @ansi_bold),
            "│",
@@ -385,6 +387,7 @@ defmodule SymphonyElixir.StatusDashboard do
           colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
           format_tracker_link_lines(),
           format_project_refresh_line(nil),
+          format_last_poll_line(nil),
           format_repo_sync_line(nil),
           closing_border()
         ]
@@ -431,6 +434,60 @@ defmodule SymphonyElixir.StatusDashboard do
     colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
   end
 
+  defp format_last_poll_line(%{} = polling) do
+    status =
+      case Map.get(polling, :last_status) || Map.get(polling, "last_status") do
+        :ok -> {"ok", @ansi_green}
+        :error -> {"error", @ansi_red}
+        "ok" -> {"ok", @ansi_green}
+        "error" -> {"error", @ansi_red}
+        _ -> {"n/a", @ansi_gray}
+      end
+
+    duration_suffix =
+      case Map.get(polling, :last_duration_ms) || Map.get(polling, "last_duration_ms") do
+        duration_ms when is_integer(duration_ms) ->
+          colorize(" #{format_poll_duration(duration_ms)}", @ansi_cyan)
+
+        _ ->
+          ""
+      end
+
+    elapsed_suffix =
+      case Map.get(polling, :last_successful_at) || Map.get(polling, "last_successful_at") do
+        %DateTime{} = timestamp ->
+          colorize(format_repo_sync_elapsed(timestamp), @ansi_dim)
+
+        timestamp when is_binary(timestamp) ->
+          case DateTime.from_iso8601(timestamp) do
+            {:ok, parsed, _offset} -> colorize(format_repo_sync_elapsed(parsed), @ansi_dim)
+            _ -> ""
+          end
+
+        _ ->
+          ""
+      end
+
+    stats_suffix =
+      case Map.get(polling, :last_stats) || Map.get(polling, "last_stats") do
+        %{} = stats ->
+          render_poll_stats(stats)
+
+        _ ->
+          ""
+      end
+
+    colorize("│ Last poll: ", @ansi_bold) <>
+      colorize(elem(status, 0), elem(status, 1)) <>
+      duration_suffix <>
+      elapsed_suffix <>
+      stats_suffix
+  end
+
+  defp format_last_poll_line(_) do
+    colorize("│ Last poll: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
+  end
+
   defp format_repo_sync_line(%{phase: phase, status: status} = repo_sync) do
     phase_label =
       case phase do
@@ -466,6 +523,43 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_repo_sync_line(_) do
     colorize("│ Last repo sync: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
+  end
+
+  defp render_poll_stats(stats) when is_map(stats) do
+    scanned = Map.get(stats, :scanned) || Map.get(stats, "scanned")
+    loaded = Map.get(stats, :loaded) || Map.get(stats, "loaded")
+    skipped = Map.get(stats, :skipped) || Map.get(stats, "skipped")
+    issue_cache_hits = Map.get(stats, :issue_cache_hits) || Map.get(stats, "issue_cache_hits")
+    comment_cache_hits = Map.get(stats, :comment_cache_hits) || Map.get(stats, "comment_cache_hits")
+    comment_fetches = Map.get(stats, :comment_fetches) || Map.get(stats, "comment_fetches")
+
+    details =
+      [
+        if(is_integer(scanned), do: "tasks=#{scanned}"),
+        if(is_integer(loaded), do: "loaded=#{loaded}"),
+        if(is_integer(skipped), do: "skipped=#{skipped}"),
+        if(is_integer(issue_cache_hits), do: "item-cache=#{issue_cache_hits}"),
+        if(is_integer(comment_cache_hits), do: "comment-cache=#{comment_cache_hits}"),
+        if(is_integer(comment_fetches), do: "comment-fetch=#{comment_fetches}")
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    if details == [] do
+      ""
+    else
+      colorize(" (" <> Enum.join(details, " ") <> ")", @ansi_dim)
+    end
+  end
+
+  defp render_poll_stats(_stats), do: ""
+
+  defp format_poll_duration(duration_ms) when is_integer(duration_ms) and duration_ms >= 1000 do
+    seconds = duration_ms / 1000
+    :erlang.float_to_binary(seconds, decimals: 2) <> "s"
+  end
+
+  defp format_poll_duration(duration_ms) when is_integer(duration_ms) do
+    "#{duration_ms}ms"
   end
 
   defp format_repo_sync_elapsed(%DateTime{} = datetime) do

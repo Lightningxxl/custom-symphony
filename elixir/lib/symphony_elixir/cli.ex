@@ -131,8 +131,11 @@ defmodule SymphonyElixir.CLI do
   end
 
   defp ensure_started(target, deps) do
+    IO.puts("Starting Symphony application...")
+
     case deps.ensure_all_started.() do
       {:ok, _started_apps} ->
+        IO.puts("Symphony application started.")
         :ok
 
       {:error, reason} ->

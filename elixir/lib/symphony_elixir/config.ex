@@ -16,6 +16,7 @@ defmodule SymphonyElixir.Config do
   @default_tracker_stage "Backlog"
   @default_task_key_prefix nil
   @default_lark_cli_command "lark-cli"
+  @default_lark_cli_timeout_ms 20_000
   @default_prompt_template """
   You are working on a Feishu task.
 
@@ -63,6 +64,10 @@ defmodule SymphonyElixir.Config do
                                  identity: [type: :string, default: @default_tracker_identity],
                                  task_key_prefix: [type: {:or, [:string, nil]}, default: @default_task_key_prefix],
                                  lark_cli_command: [type: :string, default: @default_lark_cli_command],
+                                 lark_cli_timeout_ms: [
+                                   type: :pos_integer,
+                                   default: @default_lark_cli_timeout_ms
+                                 ],
                                  default_stage: [type: :string, default: @default_tracker_stage],
                                  active_states: [
                                    type: {:list, :string},
@@ -225,6 +230,16 @@ defmodule SymphonyElixir.Config do
     validated_workflow_options()
     |> get_in([:tracker, :lark_cli_command])
     |> scalar_or_default(@default_lark_cli_command)
+  end
+
+  @spec lark_cli_timeout_ms() :: pos_integer()
+  def lark_cli_timeout_ms do
+    validated_workflow_options()
+    |> get_in([:tracker, :lark_cli_timeout_ms])
+    |> case do
+      timeout when is_integer(timeout) and timeout > 0 -> timeout
+      _ -> @default_lark_cli_timeout_ms
+    end
   end
 
   @spec feishu_task_key_prefix() :: String.t() | nil
@@ -549,6 +564,7 @@ defmodule SymphonyElixir.Config do
     |> put_if_present(:identity, scalar_string_value(Map.get(section, "identity")))
     |> put_if_present(:task_key_prefix, scalar_string_value(Map.get(section, "task_key_prefix")))
     |> put_if_present(:lark_cli_command, scalar_string_value(Map.get(section, "lark_cli_command")))
+    |> put_if_present(:lark_cli_timeout_ms, positive_integer_value(Map.get(section, "lark_cli_timeout_ms")))
     |> put_if_present(:default_stage, scalar_string_value(Map.get(section, "default_stage")))
     |> put_if_present(:active_states, csv_value(Map.get(section, "active_states")))
     |> put_if_present(:builder_states, csv_value(Map.get(section, "builder_states")))

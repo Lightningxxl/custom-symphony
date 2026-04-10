@@ -26,6 +26,7 @@ defmodule SymphonyElixir.Orchestrator do
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
   @stall_retry_grace_ms 500
+  @dispatch_revalidate_grace_ms 5_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @empty_codex_totals %{
@@ -46,6 +47,13 @@ defmodule SymphonyElixir.Orchestrator do
       :next_poll_due_at_ms,
       :poll_check_in_progress,
       :poll_task_ref,
+      :poll_started_at,
+      :poll_started_monotonic_ms,
+      :last_poll_completed_at,
+      :last_successful_poll_at,
+      :last_poll_duration_ms,
+      :last_poll_status,
+      :last_poll_stats,
       :last_repo_sync_status,
       running: %{},
       completed: MapSet.new(),
@@ -72,16 +80,29 @@ defmodule SymphonyElixir.Orchestrator do
       next_poll_due_at_ms: now_ms,
       poll_check_in_progress: false,
       poll_task_ref: nil,
+      poll_started_at: nil,
+      poll_started_monotonic_ms: nil,
+      last_poll_completed_at: nil,
+      last_successful_poll_at: nil,
+      last_poll_duration_ms: nil,
+      last_poll_status: nil,
+      last_poll_stats: nil,
       last_repo_sync_status: Application.get_env(:symphony_elixir, :last_repo_sync_status),
       codex_totals: @empty_codex_totals,
       codex_rate_limits: nil
     }
 
-    run_terminal_workspace_cleanup()
+    schedule_startup_terminal_workspace_cleanup()
     log_routing_config()
     :ok = schedule_tick(0)
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_info(:run_startup_terminal_workspace_cleanup, state) do
+    Task.start(fn -> run_terminal_workspace_cleanup() end)
+    {:noreply, state}
   end
 
   @impl true
@@ -110,6 +131,7 @@ defmodule SymphonyElixir.Orchestrator do
       state
       |> refresh_runtime_config()
       |> finish_poll_cycle(snapshot)
+      |> record_poll_completion(:ok)
 
     notify_dashboard()
     {:noreply, state}
@@ -126,6 +148,7 @@ defmodule SymphonyElixir.Orchestrator do
         | poll_task_ref: nil,
           poll_check_in_progress: false
       })
+      |> record_poll_completion(:error)
 
     notify_dashboard()
     {:noreply, state}
@@ -141,6 +164,7 @@ defmodule SymphonyElixir.Orchestrator do
         | poll_task_ref: nil,
           poll_check_in_progress: false
       })
+      |> record_poll_completion(:error)
 
     notify_dashboard()
     {:noreply, state}
@@ -156,6 +180,7 @@ defmodule SymphonyElixir.Orchestrator do
         | poll_task_ref: nil,
           poll_check_in_progress: false
       })
+      |> record_poll_completion(:error)
 
     notify_dashboard()
     {:noreply, state}
@@ -237,12 +262,20 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp start_poll_task(%State{poll_task_ref: nil} = state) do
+    poll_started_at = DateTime.utc_now()
+    poll_started_monotonic_ms = System.monotonic_time(:millisecond)
+
     task =
       Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
         run_poll_snapshot(state)
       end)
 
-    %{state | poll_task_ref: task.ref}
+    %{
+      state
+      | poll_task_ref: task.ref,
+        poll_started_at: poll_started_at,
+        poll_started_monotonic_ms: poll_started_monotonic_ms
+    }
   end
 
   defp start_poll_task(%State{} = state), do: state
@@ -292,6 +325,36 @@ defmodule SymphonyElixir.Orchestrator do
       | poll_task_ref: nil,
         poll_check_in_progress: false
     })
+  end
+
+  defp record_poll_completion(%State{} = state, status) when status in [:ok, :error] do
+    completed_at = DateTime.utc_now()
+
+    duration_ms =
+      case state.poll_started_monotonic_ms do
+        started_ms when is_integer(started_ms) ->
+          max(0, System.monotonic_time(:millisecond) - started_ms)
+
+        _ ->
+          nil
+      end
+
+    stats =
+      case Application.get_env(:symphony_elixir, :last_feishu_candidate_fetch_stats) do
+        %{} = stats -> stats
+        _ -> nil
+      end
+
+    %{
+      state
+      | poll_started_at: nil,
+        poll_started_monotonic_ms: nil,
+        last_poll_completed_at: completed_at,
+        last_successful_poll_at: if(status == :ok, do: completed_at, else: state.last_successful_poll_at),
+        last_poll_duration_ms: duration_ms,
+        last_poll_status: status,
+        last_poll_stats: stats
+    }
   end
 
   defp schedule_next_poll(%State{} = state) do
@@ -822,22 +885,26 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil) do
-    case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
-      {:ok, %Issue{} = refreshed_issue} ->
-        do_dispatch_issue(state, refreshed_issue, attempt)
+    if issue_fresh_for_dispatch?(issue) do
+      do_dispatch_issue(state, issue, attempt)
+    else
+      case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
+        {:ok, %Issue{} = refreshed_issue} ->
+          do_dispatch_issue(state, refreshed_issue, attempt)
 
-      {:skip, :missing} ->
-        Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
-        state
+        {:skip, :missing} ->
+          Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
+          state
 
-      {:skip, %Issue{} = refreshed_issue} ->
-        Logger.info("Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)}")
+        {:skip, %Issue{} = refreshed_issue} ->
+          Logger.info("Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)}")
 
-        state
+          state
 
-      {:error, reason} ->
-        Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
-        state
+        {:error, reason} ->
+          Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
+          state
+      end
     end
   end
 
@@ -987,6 +1054,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
 
+  defp issue_fresh_for_dispatch?(%Issue{fetched_at: %DateTime{} = fetched_at}) do
+    DateTime.diff(DateTime.utc_now(), fetched_at, :millisecond) <= @dispatch_revalidate_grace_ms
+  end
+
+  defp issue_fresh_for_dispatch?(_issue), do: false
+
   defp complete_issue(%State{} = state, issue_id) do
     %{
       state
@@ -1094,7 +1167,14 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp cleanup_issue_workspace(_identifier), do: :ok
 
+  defp schedule_startup_terminal_workspace_cleanup do
+    send(self(), :run_startup_terminal_workspace_cleanup)
+    :ok
+  end
+
   defp run_terminal_workspace_cleanup do
+    Logger.info("Starting asynchronous terminal workspace cleanup")
+
     case Config.validate!() do
       :ok ->
         case Tracker.fetch_issues_by_states(Config.terminal_states()) do
@@ -1116,6 +1196,8 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.debug("Skipping startup terminal workspace cleanup; tracker not ready: #{inspect(reason)}")
     end
+
+    Logger.info("Finished asynchronous terminal workspace cleanup")
   end
 
   defp notify_dashboard do
@@ -1296,7 +1378,12 @@ defmodule SymphonyElixir.Orchestrator do
        polling: %{
          checking?: state.poll_check_in_progress == true,
          next_poll_in_ms: next_poll_in_ms(state.next_poll_due_at_ms, now_ms),
-         poll_interval_ms: state.poll_interval_ms
+         poll_interval_ms: state.poll_interval_ms,
+         last_completed_at: state.last_poll_completed_at,
+         last_successful_at: state.last_successful_poll_at,
+         last_duration_ms: state.last_poll_duration_ms,
+         last_status: state.last_poll_status,
+         last_stats: state.last_poll_stats
        }
      }, state}
   end
