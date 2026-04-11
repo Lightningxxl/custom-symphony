@@ -21,7 +21,7 @@ helper scripts so you can run quickly.
 1. Install runtime and build once:
 
 ```bash
-cd /Users/lightningmb/Projects/symphony
+cd /home/lightningxxl/.openclaw/workspace/projects/custom-symphony
 ./scripts/option2-setup.sh
 ```
 
@@ -43,7 +43,7 @@ For Claworld, use:
 ```bash
 export LINEAR_API_KEY='your-linear-token'
 export LINEAR_PROJECT_SLUG_ID='b6cad86a7c54'
-cd /Users/lightningmb/Projects/symphony
+cd /home/lightningxxl/.openclaw/workspace/projects/custom-symphony
 ./scripts/run-claworld.sh
 ```
 
@@ -51,16 +51,16 @@ For Claworld, treat `./scripts/run-claworld.sh` as the only supported launcher.
 It resolves a canonical local mirror, optionally refreshes its remote-tracking refs with a
 non-destructive `git fetch`, exports an explicit `CLAWORLD_CANONICAL_SOURCE_REF`, and then hands
 control to Symphony. Do not run
-`./scripts/option2-run.sh /Users/lightningmb/Projects/claworld/WORKFLOW.md` directly unless you are
+`./scripts/option2-run.sh /home/lightningxxl/.openclaw/workspace/projects/claworld/WORKFLOW.md` directly unless you are
 also setting the Claworld-specific bootstrap env vars yourself.
 
 Default assumptions in `scripts/run-claworld.sh`:
 
-- Claworld repo: `~/Projects/claworld`
+- Claworld repo: `/home/lightningxxl/.openclaw/workspace/projects/claworld`
 - Claworld canonical source ref: `origin/HEAD` when available, otherwise `origin/main`, then local `HEAD`
-- Symphony workspaces: `~/Projects/claworld-workspaces`
-- OpenClaw reference repo: `~/Projects/openclaw`
-- Feishu reference repo: `~/Projects/clawdbot-feishu` or `~/Projects/clawbot-feishu`
+- Symphony workspaces: `/home/lightningxxl/.openclaw/workspace/projects/claworld-workspaces`
+- OpenClaw reference repo: `/home/lightningxxl/.openclaw/workspace`
+- Feishu reference repo: `$PROJECTS_ROOT/clawdbot-feishu (if present)` or `$PROJECTS_ROOT/clawbot-feishu (fallback if present)`
 
 Override them with env vars when needed:
 
@@ -103,12 +103,12 @@ Treat `elixir/WORKFLOW.md` as a reference workflow for Symphony itself, not as t
 authoritative Claworld runtime contract. For Claworld development, the source of truth is:
 
 - `scripts/run-claworld.sh` for launcher/bootstrap policy
-- `~/Projects/claworld/WORKFLOW.md` for project-owned workspace/bootstrap rules
-- `~/Projects/claworld/docs/SYMPHONY_HARNESS.md` for harness expectations
+- `/home/lightningxxl/.openclaw/workspace/projects/claworld/WORKFLOW.md` for project-owned workspace/bootstrap rules
+- `/home/lightningxxl/.openclaw/workspace/projects/claworld/docs/SYMPHONY_HARNESS.md` for harness expectations
 
 The practical consequence is:
 
-- `~/Projects/claworld` acts as the canonical local mirror
+- `/home/lightningxxl/.openclaw/workspace/projects/claworld` acts as the canonical local mirror
 - launcher startup refreshes that mirror from `origin` once before scheduling begins
 - Claworld workspaces are bootstrapped from an explicit canonical source repo and canonical source ref
 - Claworld retries should reuse the existing workspace instead of auto-pulling remote state
@@ -214,7 +214,7 @@ Examples:
 Run:
 
 ```bash
-cd /Users/lightningmb/Projects/symphony/elixir
+cd /home/lightningxxl/.openclaw/workspace/projects/custom-symphony/elixir
 mise trust
 ```
 

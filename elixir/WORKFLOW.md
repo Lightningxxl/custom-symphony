@@ -18,14 +18,11 @@ tracker:
 polling:
   interval_ms: 5000
 workspace:
-  root: /Users/lightningmb/Projects/symphony-workspaces
+  root: /home/lightningxxl/.openclaw/workspace/projects/custom-symphony-workspaces
 hooks:
   after_create: |
-    GIT_SSH_COMMAND="ssh -i /Users/lightningmb/Projects/symphony/.keys/persona_backend_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o HostName=ssh.github.com -p 443" \
-      git clone --depth 1 git@github.com:Lightningxxl/claworld.git .
+    git clone --depth 1 git@github.com:Lightningxxl/claworld.git .
     test -d .git
-    # Persist SSH auth settings in repo so later pull/push by agents do not depend on env vars.
-    git config core.sshCommand "ssh -i /Users/lightningmb/Projects/symphony/.keys/persona_backend_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o HostName=ssh.github.com -p 443"
   before_remove: |
     if [ -d elixir ] && command -v mise >/dev/null 2>&1; then
       cd elixir && mise exec -- mix workspace.before_remove || true

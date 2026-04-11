@@ -2,9 +2,35 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/Projects}"
+PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/.openclaw/workspace/projects}"
 CLAWORLD_ROOT="${CLAWORLD_ROOT:-$PROJECTS_ROOT/claworld}"
 WORKFLOW_PATH="${WORKFLOW_PATH:-$CLAWORLD_ROOT/WORKFLOW.md}"
+
+load_env_file() {
+  local env_file="$1"
+  if [[ ! -f "$env_file" ]]; then
+    return
+  fi
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
+}
+
+# Load user env for non-interactive launches.
+# Prefer dedicated env files first because ~/.bashrc may early-return in non-interactive shells.
+load_env_file "$HOME/.config/linear/linear.env"
+load_env_file "$CLAWORLD_ROOT/.env"
+load_env_file "$CLAWORLD_ROOT/.env.local"
+if [[ -f "$HOME/.bashrc" ]]; then
+  # shellcheck disable=SC1090
+  source "$HOME/.bashrc" || true
+fi
+if [[ -f "$HOME/.zshrc" ]]; then
+  # shellcheck disable=SC1090
+  source "$HOME/.zshrc" || true
+fi
 
 if [[ ! -f "$WORKFLOW_PATH" ]]; then
   echo "error: missing Claworld workflow at $WORKFLOW_PATH"
@@ -86,17 +112,21 @@ normalize_github_push_url() {
 }
 
 if [[ -z "${SYMPHONY_WORKSPACE_ROOT:-}" ]]; then
-  export SYMPHONY_WORKSPACE_ROOT="$PROJECTS_ROOT/claworld-workspaces"
+  export SYMPHONY_WORKSPACE_ROOT="$PROJECTS_ROOT/custom-symphony-workspaces"
 fi
 
 if [[ -z "${OPENCLAW_REF_ROOT:-}" ]]; then
-  export OPENCLAW_REF_ROOT="$PROJECTS_ROOT/openclaw"
+  export OPENCLAW_REF_ROOT="$HOME/.openclaw/workspace/projects/openclaw"
+fi
+
+if [[ -d "$HOME/.npm-global/bin" ]]; then
+  export PATH="$HOME/.npm-global/bin:$PATH"
 fi
 
 if [[ -z "${CLAWDBOT_FEISHU_REF_ROOT:-}" ]]; then
   if [[ -d "$PROJECTS_ROOT/clawdbot-feishu" ]]; then
     export CLAWDBOT_FEISHU_REF_ROOT="$PROJECTS_ROOT/clawdbot-feishu"
-  else
+  elif [[ -d "$PROJECTS_ROOT/clawbot-feishu" ]]; then
     export CLAWDBOT_FEISHU_REF_ROOT="$PROJECTS_ROOT/clawbot-feishu"
   fi
 fi
@@ -119,10 +149,8 @@ if [[ -z "${CLAWORLD_PUSH_REPO_URL:-}" ]]; then
   fi
 fi
 
-export CLAWORLD_REFRESH_CANONICAL_SOURCE_ON_START="$(
-  resolve_env_or_legacy "CLAWORLD_REFRESH_CANONICAL_SOURCE_ON_START" "CLAWORLD_SYNC_REMOTE_ON_START" "1"
-)"
-export CLAWORLD_SYNC_REMOTE_ON_START="$CLAWORLD_REFRESH_CANONICAL_SOURCE_ON_START"
+export CLAWORLD_REFRESH_CANONICAL_SOURCE_ON_START="${CLAWORLD_REFRESH_CANONICAL_SOURCE_ON_START:-1}"
+export CLAWORLD_SYNC_REMOTE_ON_START="${CLAWORLD_SYNC_REMOTE_ON_START:-$CLAWORLD_REFRESH_CANONICAL_SOURCE_ON_START}"
 
 export CLAWORLD_ALLOW_STALE_CANONICAL_SOURCE_ON_START="$(
   resolve_env_or_legacy "CLAWORLD_ALLOW_STALE_CANONICAL_SOURCE_ON_START" "CLAWORLD_ALLOW_STALE_SOURCE_ON_START" "0"
@@ -154,6 +182,6 @@ echo "  push repo: ${CLAWORLD_PUSH_REPO_URL:-unset}"
 echo "  allow stale canonical source: ${CLAWORLD_ALLOW_STALE_CANONICAL_SOURCE_ON_START}"
 echo "  workspaces: $SYMPHONY_WORKSPACE_ROOT"
 echo "  openclaw ref: $OPENCLAW_REF_ROOT"
-echo "  clawdbot-feishu ref: $CLAWDBOT_FEISHU_REF_ROOT"
+echo "  clawdbot-feishu ref: ${CLAWDBOT_FEISHU_REF_ROOT:-unset}"
 
 exec "$ROOT_DIR/scripts/option2-run.sh" "$WORKFLOW_PATH"
