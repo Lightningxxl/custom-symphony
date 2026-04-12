@@ -54,7 +54,15 @@ defmodule SymphonyElixir.Config do
   @default_observability_refresh_ms 1_000
   @default_observability_render_interval_ms 16
   @default_server_host "127.0.0.1"
+  @default_canonical_branch "testing"
   @workflow_options_schema NimbleOptions.new!(
+                             repo: [
+                               type: :map,
+                               default: %{},
+                               keys: [
+                                 canonical_branch: [type: :string, default: @default_canonical_branch]
+                               ]
+                             ],
                              tracker: [
                                type: :map,
                                default: %{},
@@ -203,6 +211,13 @@ defmodule SymphonyElixir.Config do
   @spec current_workflow() :: {:ok, workflow_payload()} | {:error, term()}
   def current_workflow do
     Workflow.current()
+  end
+
+  @spec canonical_branch() :: String.t()
+  def canonical_branch do
+    validated_workflow_options()
+    |> get_in([:repo, :canonical_branch])
+    |> scalar_or_default(@default_canonical_branch)
   end
 
   @spec tracker_kind() :: tracker_kind()
@@ -546,6 +561,7 @@ defmodule SymphonyElixir.Config do
 
   defp extract_workflow_options(config) do
     %{
+      repo: extract_repo_options(section_map(config, "repo")),
       tracker: extract_tracker_options(section_map(config, "tracker")),
       polling: extract_polling_options(section_map(config, "polling")),
       workspace: extract_workspace_options(section_map(config, "workspace")),
@@ -555,6 +571,11 @@ defmodule SymphonyElixir.Config do
       observability: extract_observability_options(section_map(config, "observability")),
       server: extract_server_options(section_map(config, "server"))
     }
+  end
+
+  defp extract_repo_options(section) do
+    %{}
+    |> put_if_present(:canonical_branch, scalar_string_value(Map.get(section, "canonical_branch")))
   end
 
   defp extract_tracker_options(section) do

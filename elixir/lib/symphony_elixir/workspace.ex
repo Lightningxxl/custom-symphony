@@ -170,7 +170,11 @@ defmodule SymphonyElixir.Workspace do
 
     task =
       Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
+        System.cmd("sh", ["-lc", command],
+          cd: workspace,
+          stderr_to_stdout: true,
+          env: hook_env(issue_context)
+        )
       end)
 
     case Task.yield(task, timeout_ms) do
@@ -208,6 +212,12 @@ defmodule SymphonyElixir.Workspace do
       false ->
         binary_part(binary_output, 0, max_bytes) <> "... (truncated)"
     end
+  end
+
+  defp hook_env(_issue_context) do
+    [
+      {"SYMPHONY_CANONICAL_BRANCH", Config.canonical_branch()}
+    ]
   end
 
   defp validate_workspace_path(workspace) when is_binary(workspace) do

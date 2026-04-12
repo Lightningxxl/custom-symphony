@@ -1610,17 +1610,18 @@ defmodule SymphonyElixir.Orchestrator do
        when is_binary(state_name) do
     if normalize_issue_state(state_name) == "merging" do
       repo_root = Workflow.repo_root()
+      canonical_branch = Config.canonical_branch()
       checking_status = repo_sync_status(:merge, :checking, repo_root, nil)
       Application.put_env(:symphony_elixir, :last_repo_sync_status, checking_status)
       notify_dashboard()
 
-      case CanonicalRepo.ensure_ready(repo_root) do
+      case CanonicalRepo.ensure_ready(repo_root, branch: canonical_branch) do
         {:ok, :up_to_date} ->
-          Logger.info("Canonical planner repo already up to date after merge for #{identifier}")
+          Logger.info("Canonical planner repo already up to date on #{canonical_branch} after merge for #{identifier}")
           set_repo_sync_status(state, repo_sync_status(:merge, :up_to_date, repo_root, nil))
 
         {:ok, :pulled} ->
-          Logger.info("Canonical planner repo fast-forwarded after merge for #{identifier}")
+          Logger.info("Canonical planner repo fast-forwarded to #{canonical_branch} after merge for #{identifier}")
           set_repo_sync_status(state, repo_sync_status(:merge, :pulled, repo_root, nil))
 
         {:error, reason} ->

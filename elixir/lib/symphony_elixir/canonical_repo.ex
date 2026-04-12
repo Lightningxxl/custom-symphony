@@ -1,11 +1,11 @@
 defmodule SymphonyElixir.CanonicalRepo do
   @moduledoc """
-  Keeps the local planner-facing canonical repo aligned with `origin/main` when it
-  is safe to do so.
+  Keeps the local planner-facing canonical repo aligned with the configured
+  canonical branch when it is safe to do so.
   """
 
   @default_remote "origin"
-  @default_branch "main"
+  @default_branch "testing"
 
   @type sync_result :: {:ok, :up_to_date | :pulled} | {:error, String.t()}
   @type runner :: (String.t(), [String.t()] -> {String.t(), non_neg_integer()})
@@ -18,7 +18,7 @@ defmodule SymphonyElixir.CanonicalRepo do
 
     with :ok <- ensure_git_repo(repo_root, runner),
          {:ok, current_branch} <- current_branch(repo_root, runner),
-         :ok <- ensure_main_branch(repo_root, current_branch, branch),
+         :ok <- ensure_expected_branch(repo_root, current_branch, branch),
          :ok <- ensure_clean_worktree(repo_root, runner),
          :ok <- fetch_remote_branch(repo_root, runner, remote, branch),
          {:ok, remote_only_count, local_only_count} <-
@@ -50,12 +50,11 @@ defmodule SymphonyElixir.CanonicalRepo do
     end
   end
 
-  defp ensure_main_branch(repo_root, current_branch, expected_branch) do
+  defp ensure_expected_branch(repo_root, current_branch, expected_branch) do
     if current_branch == expected_branch do
       :ok
     else
-      {:error,
-       "Planner source repo at #{repo_root} must be on #{expected_branch} before Symphony starts or after merge syncs; current branch is #{current_branch}."}
+      {:error, "Planner source repo at #{repo_root} must be on #{expected_branch} before Symphony starts or after merge syncs; current branch is #{current_branch}."}
     end
   end
 
@@ -65,8 +64,7 @@ defmodule SymphonyElixir.CanonicalRepo do
         :ok
 
       {:ok, output} ->
-        {:error,
-         "Planner source repo at #{repo_root} has uncommitted changes. Commit, stash, or discard them before Symphony starts or auto-syncs after merge.\n#{output}"}
+        {:error, "Planner source repo at #{repo_root} has uncommitted changes. Commit, stash, or discard them before Symphony starts or auto-syncs after merge.\n#{output}"}
 
       {:error, reason} ->
         {:error, "Failed to inspect git status for #{repo_root}: #{reason}"}
@@ -93,8 +91,7 @@ defmodule SymphonyElixir.CanonicalRepo do
               {:ok, remote_only_count, local_only_count}
             else
               _ ->
-                {:error,
-                 "Failed to parse ahead/behind counts for #{repo_root}: #{inspect(counts)}"}
+                {:error, "Failed to parse ahead/behind counts for #{repo_root}: #{inspect(counts)}"}
             end
 
           _ ->
@@ -121,14 +118,12 @@ defmodule SymphonyElixir.CanonicalRepo do
 
   defp sync_if_needed(repo_root, _runner, remote, branch, 0, local_only_count)
        when local_only_count > 0 do
-    {:error,
-     "Planner source repo at #{repo_root} is ahead of #{remote}/#{branch}. Push or reset it before Symphony starts or auto-syncs after merge."}
+    {:error, "Planner source repo at #{repo_root} is ahead of #{remote}/#{branch}. Push or reset it before Symphony starts or auto-syncs after merge."}
   end
 
   defp sync_if_needed(repo_root, _runner, remote, branch, remote_only_count, local_only_count)
        when remote_only_count > 0 and local_only_count > 0 do
-    {:error,
-     "Planner source repo at #{repo_root} has diverged from #{remote}/#{branch}. Reconcile it manually before Symphony starts or auto-syncs after merge."}
+    {:error, "Planner source repo at #{repo_root} has diverged from #{remote}/#{branch}. Reconcile it manually before Symphony starts or auto-syncs after merge."}
   end
 
   defp run_git(repo_root, runner, args) when is_function(runner, 2) do

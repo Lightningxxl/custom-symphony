@@ -109,6 +109,7 @@ defmodule SymphonyElixir.TestSupport do
     config =
       Keyword.merge(
         [
+          repo_canonical_branch: "testing",
           tracker_kind: "memory",
           tracker_tasklist_guid: nil,
           tracker_identity: "user",
@@ -141,11 +142,12 @@ defmodule SymphonyElixir.TestSupport do
           observability_refresh_ms: 1_000,
           observability_render_interval_ms: 16,
           server_port: nil,
-          server_host: nil,
+          server_host: nil
         ],
         overrides
       )
 
+    repo_canonical_branch = Keyword.get(config, :repo_canonical_branch)
     tracker_kind = Keyword.get(config, :tracker_kind)
     tracker_tasklist_guid = Keyword.get(config, :tracker_tasklist_guid)
     tracker_identity = Keyword.get(config, :tracker_identity)
@@ -179,8 +181,11 @@ defmodule SymphonyElixir.TestSupport do
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
     server_port = Keyword.get(config, :server_port)
     server_host = Keyword.get(config, :server_host)
+
     sections =
       [
+        "repo:",
+        "  canonical_branch: #{yaml_value(repo_canonical_branch)}",
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
         "  tasklist_guid: #{yaml_value(tracker_tasklist_guid)}",

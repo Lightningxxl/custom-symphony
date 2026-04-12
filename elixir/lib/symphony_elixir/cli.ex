@@ -144,6 +144,8 @@ defmodule SymphonyElixir.CLI do
   end
 
   defp sync_repo(repo_root) when is_binary(repo_root) do
+    canonical_branch = SymphonyElixir.Config.canonical_branch()
+
     sync_status = %{
       phase: :startup,
       status: :checking,
@@ -154,7 +156,7 @@ defmodule SymphonyElixir.CLI do
     Application.put_env(:symphony_elixir, :last_repo_sync_status, sync_status)
     IO.puts("Checking planner source repo: #{repo_root}")
 
-    case SymphonyElixir.CanonicalRepo.ensure_ready(repo_root) do
+    case SymphonyElixir.CanonicalRepo.ensure_ready(repo_root, branch: canonical_branch) do
       {:ok, :up_to_date} ->
         Application.put_env(:symphony_elixir, :last_repo_sync_status, %{
           phase: :startup,
@@ -163,7 +165,7 @@ defmodule SymphonyElixir.CLI do
           at: DateTime.utc_now()
         })
 
-        IO.puts("Planner source repo already up to date.")
+        IO.puts("Planner source repo already up to date on #{canonical_branch}.")
         :ok
 
       {:ok, :pulled} ->
@@ -174,7 +176,7 @@ defmodule SymphonyElixir.CLI do
           at: DateTime.utc_now()
         })
 
-        IO.puts("Fast-forwarded planner source repo to latest origin/main.")
+        IO.puts("Fast-forwarded planner source repo to latest origin/#{canonical_branch}.")
         :ok
 
       {:error, reason} ->
