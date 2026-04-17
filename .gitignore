@@ -2,3 +2,11 @@
 /symphony-main.zip
 /symphony-main/
 /.keys/
+
+# Backup and log files
+.backups/
+logs/
+*.bak-*
+
+# Local workflow files (user-specific)
+**/WORKFLOW.*.local.md
